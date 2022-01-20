@@ -1,10 +1,10 @@
-# CS3700_Project1
+# CS3700_Projects
 
-## Assignment 1
+## Project 1
 
 Implement basic socket connection to play the game Wordle
 
-### Wordle game logic iterations
+### Journey through my Wordle game logic development
 
 #### Iteration 1
 
