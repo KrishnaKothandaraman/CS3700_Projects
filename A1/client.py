@@ -17,7 +17,6 @@ class Client:
         self.greys = set()
         # exists but in different position to guess -- network return value: 1
         self.oranges = {}
-        # initial guess because 3 vowels and 2 consonants
         self.guess = None
         self.game_over = False
         self.guess_history = set()
@@ -96,11 +95,13 @@ class Client:
         if self.guess:
             next_guess = self.get_next_guess()
         else:
+            # initial guess because 3 vowels and 2 consonants
             next_guess = "about"
 
         payload = {"type": "guess", "id": self.id, "word": next_guess}
         data = json.dumps(payload) + '\n'
         print(f"[GUESSING] {data}")
+        self.num_guesses += 1
         self.sock.sendall(bytes(data, encoding="utf-8"))
         resp = json.loads(self.get_resp())
 
