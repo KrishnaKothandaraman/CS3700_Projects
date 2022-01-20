@@ -1,6 +1,6 @@
 import socket
 import json
-from wordlist import arr
+from wordlist import arr as wordlist
 
 
 def error_log(msg):
@@ -11,27 +11,33 @@ class Client:
     def __init__(self):
         self.HOST = "proj1.3700.network"
         self.PORT = 27993
-        self.s = None
+        self.sock = None
         self.id = ""
         self.startConnection()
+        # does not exist -- network return val: 0
+        self.greys = set()
+        # exists but in different position to guess -- network return value: 1
+        self.oranges = {}
+        # initial guess because 3 vowels and 2 consonants
+        self.guess = ['a', 'b', 'o', 'u', 't']
 
     def __del__(self):
-        assert isinstance(self.s, socket.socket), "Socket Initialization failed"
+        assert isinstance(self.sock, socket.socket), "Socket Initialization failed"
         print("[CLOSING]")
-        self.s.close()
+        self.sock.close()
 
     def initSocket(self):
-        self.s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.s.connect((self.HOST, self.PORT))
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.sock.connect((self.HOST, self.PORT))
 
     def startConnection(self):
         self.initSocket()
-        assert isinstance(self.s, socket.socket), "Socket Initialization failed"
+        assert isinstance(self.sock, socket.socket), "Socket Initialization failed"
         payload = {"type": "hello", "northeastern_username": "kothandaraman.k"}
         data = json.dumps(payload) + '\n'
         print(f"[SENDING] {data}")
-        self.s.sendall(bytes(data, encoding="utf-8"))
-        resp = json.loads(self.getresp())
+        self.sock.sendall(bytes(data, encoding="utf-8"))
+        resp = json.loads(self.get_resp())
 
         if resp["type"] == "error":
             error_log(resp["message"])
@@ -41,13 +47,60 @@ class Client:
             print(f"[RECEIVED] id: {self.id}")
             self.play()
 
-    def play(self):
-        print("[PLAYING]")
+    def is_possible_guess(self, word):
+        word_list = word.split('')
 
-    def getresp(self):
+        # word has letter that is a grey
+        for letter in word_list:
+            if letter in self.greys:
+                return False
+
+        # word does not have a green in same position
+        for i in range(len(self.guess)):
+            if self.guess[i] != '-' and self.guess[i] != word_list[i]:
+                return False
+
+        # word has a letter in orange and at same position as seen before
+        for i in range(len(word_list)):
+            if word_list[i] in self.oranges and i in self.oranges[word_list[i]]:
+                return False
+
+        return True
+
+    def get_next_guess(self):
+        for word in wordlist:
+            if self.is_possible_guess(word):
+                return word
+
+    def update_guess(self, history):
+        for guess in history:
+            pass
+
+    def play(self):
+        if self.guess != ['a', 'b', 'o', 'u', 't']:
+            next_guess = self.get_next_guess()
+        else:
+            next_guess = "about"
+
+        payload = {"type": "guess", "id": self.id, "guess": next_guess}
+        data = json.dumps(payload) + '\n'
+        print(f"[SENDING] {data}")
+        self.sock.sendall(bytes(data, encoding="utf-8"))
+        resp = json.loads(self.get_resp())
+
+        if resp["type"] == "error":
+            error_log(resp["message"])
+
+        elif resp["type"] == "bye":
+            print(f'[GAME OVER] secret flag: {resp["flag"]}')
+
+        else:
+            self.update_guess(resp["guesses"])
+
+    def get_resp(self):
         resp = ''
         while True:
-            buf = self.s.recv(1)
+            buf = self.sock.recv(1)
             if buf.decode("utf-8") == '\n':
                 break
             resp += buf.decode("utf-8")
