@@ -101,7 +101,6 @@ class Client:
         payload = {"type": "guess", "id": self.id, "word": next_guess}
         data = json.dumps(payload) + '\n'
         print(f"[GUESSING] {data}")
-        self.num_guesses += 1
         self.sock.sendall(bytes(data, encoding="utf-8"))
         resp = json.loads(self.get_resp())
 
