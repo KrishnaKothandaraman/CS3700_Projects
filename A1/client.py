@@ -90,19 +90,19 @@ class Client:
     def update_guess(self, history):
         self.guess = ['-', '-', '-', '-', '-']
         for guess in history:
-            greens_and_greys = set()
+            greens_and_oranges = set()
             for i in range(len(guess["word"])):
                 if guess["marks"][i] == 2:
                     self.guess[i] = guess["word"][i]
-                    greens_and_greys.add(guess["word"][i])
+                    greens_and_oranges.add(guess["word"][i])
                 elif guess["marks"][i] == 1:
                     if guess["word"][i] in self.oranges:
                         self.oranges[guess["word"][i]].append(i)
                     else:
                         self.oranges[guess["word"][i]] = [i]
-                    greens_and_greys.add(guess["word"][i])
+                    greens_and_oranges.add(guess["word"][i])
                 else:
-                    if guess["word"][i] not in greens_and_greys:
+                    if guess["word"][i] not in greens_and_oranges:
                         self.greys.add(guess["word"][i])
             self.guess_history.add(guess["word"])
 
