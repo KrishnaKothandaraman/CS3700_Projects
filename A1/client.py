@@ -1,5 +1,8 @@
 import socket
 import json
+import ssl
+import sys
+import argparse
 from wordlist import arr as wordlist
 
 
@@ -8,9 +11,17 @@ def error_log(msg):
 
 
 class Client:
-    def __init__(self):
-        self.HOST = "proj1.3700.network"
-        self.PORT = 27993
+    def __init__(self, hostname, username, port=27993, secret=False):
+        self.HOST = hostname
+        self.username = username
+        self.is_secret = secret
+        if self.is_secret:
+            if port != 27993:
+                self.PORT = port
+            else:
+                self.PORT = 27994
+        else:
+            self.PORT = port
         self.sock = None
         self.id = ""
         # does not exist -- network return val: 0
@@ -28,13 +39,17 @@ class Client:
         self.sock.close()
 
     def initSocket(self):
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        if self.is_secret:
+            self.sock = ssl.create_default_context().wrap_socket(s, server_hostname=self.HOST)
+        else:
+            self.sock = s
         self.sock.connect((self.HOST, self.PORT))
 
     def startConnection(self):
         self.initSocket()
-        assert isinstance(self.sock, socket.socket), "Socket Initialization failed"
-        payload = {"type": "hello", "northeastern_username": "kothandaraman.k"}
+        assert self.sock is not None, "Socket Initialization failed"
+        payload = {"type": "hello", "northeastern_username": self.username}
         data = json.dumps(payload) + '\n'
         print(f"[SENDING] {data}")
         self.sock.sendall(bytes(data, encoding="utf-8"))
@@ -126,4 +141,13 @@ class Client:
 
 
 if __name__ == "__main__":
-    c = Client()
+    parser = argparse.ArgumentParser("Play game of Wordle over a network")
+    parser.add_argument('-s', action="store_true", required=False, help="Create TLS connection")
+    parser.add_argument('-p', type=int, metavar='', required=False, help="Specify port to connect to")
+    parser.add_argument('hostname', metavar='HOSTNAME',
+                        help='Specify hostname to connect to. Either IP or DNS name')
+    parser.add_argument('username', metavar='USERNAME', help='Specify username to connect with')
+    args = parser.parse_args()
+    if args.p is None:
+        args.p = 27993
+    c = Client(args.hostname, args.username, args.p, args.s)
