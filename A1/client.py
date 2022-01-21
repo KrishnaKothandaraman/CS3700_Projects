@@ -1,9 +1,10 @@
 import socket
 import json
 import ssl
-import sys
 import argparse
 from wordlist import arr as wordlist
+from jsonschema import validate
+from schema import start_schema, retry_schema, bye_schema
 
 
 def error_log(msg):
@@ -45,6 +46,16 @@ class Client:
             self.sock = s
         self.sock.connect((self.HOST, self.PORT))
 
+    def validate_response_format(self, response, type):
+        if type == "start":
+            validate(response, schema=start_schema)
+        elif type == "retry":
+            validate(response, schema=retry_schema)
+        elif type == "bye":
+            validate(response, schema=bye_schema)
+
+        return True
+
     def startConnection(self):
         self.initSocket()
         assert self.sock is not None, "Socket Initialization failed"
@@ -53,6 +64,7 @@ class Client:
         self.sock.sendall(bytes(data, encoding="utf-8"))
         resp = json.loads(self.get_resp())
 
+        self.validate_response_format(resp, "start")
         if resp["type"] == "error":
             error_log(resp["message"])
 
@@ -120,10 +132,12 @@ class Client:
             self.game_over = True
 
         elif resp["type"] == "bye":
+            self.validate_response_format(resp, "bye")
             print(resp["flag"])
             self.game_over = True
 
         else:
+            self.validate_response_format(resp, "retry")
             self.update_guess(resp["guesses"])
 
     def get_resp(self):
