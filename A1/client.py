@@ -11,17 +11,17 @@ def error_log(msg):
 
 
 class Client:
-    def __init__(self, hostname, username, port=27993, secret=False):
+    def __init__(self, hostname, username, port, secret=False):
         self.HOST = hostname
         self.username = username
         self.is_secret = secret
-        if self.is_secret:
-            if port != 27993:
-                self.PORT = port
-            else:
-                self.PORT = 27994
-        else:
+        if port:
             self.PORT = port
+        else:
+            if self.is_secret:
+                self.PORT = 27994
+            else:
+                self.PORT = 27993
         self.sock = None
         self.id = ""
         # does not exist -- network return val: 0
@@ -35,7 +35,6 @@ class Client:
 
     def __del__(self):
         assert isinstance(self.sock, socket.socket), "Socket Initialization failed"
-        print("[CLOSING]")
         self.sock.close()
 
     def initSocket(self):
@@ -51,7 +50,6 @@ class Client:
         assert self.sock is not None, "Socket Initialization failed"
         payload = {"type": "hello", "northeastern_username": self.username}
         data = json.dumps(payload) + '\n'
-        print(f"[SENDING] {data}")
         self.sock.sendall(bytes(data, encoding="utf-8"))
         resp = json.loads(self.get_resp())
 
@@ -60,7 +58,6 @@ class Client:
 
         else:
             self.id = resp["id"]
-            print(f"[RECEIVED] id: {self.id}")
             while not self.game_over:
                 self.play()
 
@@ -115,7 +112,6 @@ class Client:
 
         payload = {"type": "guess", "id": self.id, "word": next_guess}
         data = json.dumps(payload) + '\n'
-        print(f"[GUESSING] {data}")
         self.sock.sendall(bytes(data, encoding="utf-8"))
         resp = json.loads(self.get_resp())
 
@@ -124,7 +120,7 @@ class Client:
             self.game_over = True
 
         elif resp["type"] == "bye":
-            print(f'[GAME OVER] secret flag: {resp["flag"]}')
+            print(resp["flag"])
             self.game_over = True
 
         else:
@@ -148,6 +144,4 @@ if __name__ == "__main__":
                         help='Specify hostname to connect to. Either IP or DNS name')
     parser.add_argument('username', metavar='USERNAME', help='Specify username to connect with')
     args = parser.parse_args()
-    if args.p is None:
-        args.p = 27993
     c = Client(args.hostname, args.username, args.p, args.s)
