@@ -3,8 +3,6 @@ import json
 import ssl
 import argparse
 from wordlist import arr as wordlist
-from jsonschema import validate
-from schema import start_schema, retry_schema, bye_schema
 
 
 def error_log(msg):
@@ -46,30 +44,31 @@ class Client:
             self.sock = s
         self.sock.connect((self.HOST, self.PORT))
 
-    def validate_response_format(self, response, type):
-        if type == "start":
-            validate(response, schema=start_schema)
-        elif type == "retry":
-            validate(response, schema=retry_schema)
-        elif type == "bye":
-            validate(response, schema=bye_schema)
-
-        return True
-
     def startConnection(self):
         self.initSocket()
         assert self.sock is not None, "Socket Initialization failed"
         payload = {"type": "hello", "northeastern_username": self.username}
         data = json.dumps(payload) + '\n'
         self.sock.sendall(bytes(data, encoding="utf-8"))
-        resp = json.loads(self.get_resp())
-
-        self.validate_response_format(resp, "start")
-        if resp["type"] == "error":
-            error_log(resp["message"])
+        raw_resp = self.get_resp()
+        try:
+            resp = json.loads(raw_resp)
+        except ValueError:
+            print("Malformed JSON response from server")
+            exit(1)
+        try:
+            if resp["type"] == "error":
+                error_log(resp["message"])
+        except KeyError:
+            print("KeyNotFound: 'type'")
+            exit(1)
 
         else:
-            self.id = resp["id"]
+            try:
+                self.id = resp["id"]
+            except KeyError:
+                print("KeyNotFound: 'id'")
+                exit(1)
             while not self.game_over:
                 self.play()
 
@@ -110,9 +109,9 @@ class Client:
                     else:
                         self.oranges[guess["word"][i]] = [i]
                     greens_and_oranges.add(guess["word"][i])
-                else:
-                    if guess["word"][i] not in greens_and_oranges:
-                        self.greys.add(guess["word"][i])
+            for i in range(len(guess["word"])):
+                if guess["word"][i] == 0 and guess["word"][i] not in greens_and_oranges:
+                    self.greys.add(guess["word"][i])
             self.guess_history.add(guess["word"])
 
     def play(self):
@@ -121,24 +120,40 @@ class Client:
         else:
             # initial guess because 3 vowels and 2 consonants
             next_guess = "about"
-
         payload = {"type": "guess", "id": self.id, "word": next_guess}
         data = json.dumps(payload) + '\n'
         self.sock.sendall(bytes(data, encoding="utf-8"))
-        resp = json.loads(self.get_resp())
+        raw_resp = self.get_resp()
+        try:
+            resp = json.loads(raw_resp)
+        except ValueError:
+            print("Malformed JSON response from server")
+            exit(1)
+        try:
+            resp_type = resp["type"]
+        except KeyError:
+            print("KeyNotFound: 'type'")
+            exit(1)
 
-        if resp["type"] == "error":
+        if resp_type == "error":
             error_log(resp["message"])
             self.game_over = True
 
-        elif resp["type"] == "bye":
-            self.validate_response_format(resp, "bye")
-            print(resp["flag"])
+        elif resp_type == "bye":
+            try:
+                print(resp["flag"])
+            except KeyError:
+                print("KeyNotFound: 'flag'")
+                exit(1)
             self.game_over = True
 
         else:
-            self.validate_response_format(resp, "retry")
-            self.update_guess(resp["guesses"])
+            try:
+                past_guesses = resp["guesses"]
+                self.update_guess(past_guesses)
+            except KeyError:
+                print("KeyNotFound: 'guesses'")
+                exit(1)
 
     def get_resp(self):
         resp = ''
