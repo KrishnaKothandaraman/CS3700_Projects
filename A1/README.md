@@ -15,6 +15,10 @@ does not waste any intelligence gathered from previous guesses. The next guess i
 - Next guess has past orange letters(server response code 1), but in different positions to those guessed before
 - Next guess has no past grey(server response code 0) letters 
 
+
+## Tricks I have used
+
+#### First
 The first guess is strategically chosen as "about" because of the appearance of common vowels and common consonants
 to minimize the size of the maximum set of possible words to guess.
 
@@ -27,9 +31,16 @@ Server Response: [2,0,0,1,0]
 Now, the only candidates for the next guess are words that have 'a' in the first position, 'u' not in the 4th position 
 and no 'b', 'o' and 't'.
 
+#### Second
+
+For the first 4 guesses, the program tries to make guesses with no repeated letters. If this is not possible, it makes a 
+guess that has a repeated letter. This is done to make maximum use of each letter in each guess. If duplicate
+letters are used, there may be some redundancy which does not make for the most efficient learning from each guess.
+
+
 Pros
 - Easy to implement
-- Low number of guesses to get the right answer. Average 6.53 guesses per answer taken over 30 games
+- Low number of guesses to get the right answer. Average 5.93 guesses per answer taken over 30 games
 - Designed to imitate how humans solve Wordle.
 
 Cons

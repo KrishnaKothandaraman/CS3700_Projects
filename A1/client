@@ -85,9 +85,13 @@ class Client:
                 return False
 
         # word does not have a green in same position
-        for i in range(len(self.guess)):
-            if self.guess[i] != '-' and self.guess[i] != word[i]:
-                return False
+        try:
+            for i in range(len(self.guess)):
+                if self.guess[i] != '-' and self.guess[i] != word[i]:
+                    return False
+        except IndexError:
+            print(f"Index error for {self.guess} {word}")
+            exit(1)
 
         # word has a letter in orange and at same position as seen before
         for i in range(len(word)):
@@ -96,10 +100,26 @@ class Client:
 
         return True
 
+    def does_not_have_duplicates(self, word):
+        hmap = set()
+        for letter in word:
+            if letter in hmap:
+                return False
+            else:
+                hmap.add(letter)
+        return True
+
     def get_next_guess(self):
+        possible_words = []
         for word in wordlist:
             if self.is_possible_guess(word) and word not in self.guess_history:
-                return word
+                possible_words.append(word)
+
+        if self.numGuesses <= 4:
+            for word in possible_words:
+                if self.does_not_have_duplicates(word):
+                    return word
+        return possible_words[0]
 
     def update_guess(self, history):
         self.guess = ['-', '-', '-', '-', '-']
@@ -128,6 +148,7 @@ class Client:
             next_guess = "about"
 
         payload = {"type": "guess", "id": self.id, "word": next_guess}
+        #print(f"Next guess is {next_guess}")
         data = json.dumps(payload) + '\n'
         self.sock.sendall(bytes(data, encoding="utf-8"))
         self.numGuesses += 1
@@ -181,6 +202,6 @@ if __name__ == "__main__":
                         help='Specify hostname to connect to. Either IP or DNS name')
     parser.add_argument('username', metavar='USERNAME', help='Specify username to connect with')
     args = parser.parse_args()
-    avg = 0
     c = Client(args.hostname, args.username, args.p, args.s)
+
 
