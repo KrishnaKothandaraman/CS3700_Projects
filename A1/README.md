@@ -16,7 +16,7 @@ does not waste any intelligence gathered from previous guesses. The next guess i
 - Next guess has no past grey(server response code 0) letters 
 
 
-## Tricks I have used
+### Tricks I have used
 
 #### First
 The first guess is strategically chosen as "about" because of the appearance of common vowels and common consonants
