@@ -32,10 +32,14 @@ class Client:
         self.guess = None
         self.game_over = False
         self.guess_history = set()
+        self.numGuesses = 0
         self.startConnection()
 
     def __del__(self):
-        assert isinstance(self.sock, socket.socket), "Socket Initialization failed"
+        self.disconnect_server()
+
+    def disconnect_server(self):
+        assert self.sock is not None, "Cannot disconnect None Socket"
         self.sock.close()
 
     def initSocket(self):
@@ -112,7 +116,7 @@ class Client:
                         self.oranges[guess["word"][i]] = [i]
                     greens_and_oranges.add(guess["word"][i])
             for i in range(len(guess["word"])):
-                if guess["word"][i] == 0 and guess["word"][i] not in greens_and_oranges:
+                if guess["marks"][i] == 0 and guess["word"][i] not in greens_and_oranges:
                     self.greys.add(guess["word"][i])
             self.guess_history.add(guess["word"])
 
@@ -120,11 +124,13 @@ class Client:
         if self.guess:
             next_guess = self.get_next_guess()
         else:
-            # initial guess because 3 vowels and 2 consonants
+            # 3 popular vowels and 2 popular consonants
             next_guess = "about"
+
         payload = {"type": "guess", "id": self.id, "word": next_guess}
         data = json.dumps(payload) + '\n'
         self.sock.sendall(bytes(data, encoding="utf-8"))
+        self.numGuesses += 1
         raw_resp = self.get_resp()
         try:
             resp = json.loads(raw_resp)
@@ -175,4 +181,6 @@ if __name__ == "__main__":
                         help='Specify hostname to connect to. Either IP or DNS name')
     parser.add_argument('username', metavar='USERNAME', help='Specify username to connect with')
     args = parser.parse_args()
+    avg = 0
     c = Client(args.hostname, args.username, args.p, args.s)
+
