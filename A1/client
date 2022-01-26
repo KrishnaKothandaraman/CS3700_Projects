@@ -11,6 +11,16 @@ def error_log(msg):
     print(f"[ERROR]: {msg}")
 
 
+def does_not_have_duplicates(word):
+    hmap = set()
+    for letter in word:
+        if letter in hmap:
+            return False
+        else:
+            hmap.add(letter)
+    return True
+
+
 class Client:
     def __init__(self, hostname, username, port, secret=False):
         self.HOST = hostname
@@ -69,14 +79,13 @@ class Client:
             print("KeyNotFound: 'type'")
             exit(1)
 
-        else:
-            try:
-                self.id = resp["id"]
-            except KeyError:
-                print("KeyNotFound: 'id'")
-                exit(1)
+        try:
+            self.id = resp["id"]
             while not self.game_over:
                 self.play()
+        except KeyError:
+            print("KeyNotFound: 'id'")
+            exit(1)
 
     def is_possible_guess(self, word):
         # word has letter that is a grey
@@ -100,15 +109,6 @@ class Client:
 
         return True
 
-    def does_not_have_duplicates(self, word):
-        hmap = set()
-        for letter in word:
-            if letter in hmap:
-                return False
-            else:
-                hmap.add(letter)
-        return True
-
     def get_next_guess(self):
         possible_words = []
         for word in wordlist:
@@ -117,7 +117,7 @@ class Client:
 
         if self.numGuesses <= 4:
             for word in possible_words:
-                if self.does_not_have_duplicates(word):
+                if does_not_have_duplicates(word):
                     return word
         return possible_words[0]
 
@@ -148,7 +148,6 @@ class Client:
             next_guess = "about"
 
         payload = {"type": "guess", "id": self.id, "word": next_guess}
-        #print(f"Next guess is {next_guess}")
         data = json.dumps(payload) + '\n'
         self.sock.sendall(bytes(data, encoding="utf-8"))
         self.numGuesses += 1
@@ -194,6 +193,14 @@ class Client:
         return resp
 
 
+def getAverage(n):
+    avg = 0
+    for i in range(n):
+        c = Client(args.hostname, args.username, args.p, args.s)
+        avg += c.numGuesses
+    print(f"Average of {n} games is : {avg / n}")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser("Play game of Wordle over a network")
     parser.add_argument('-s', action="store_true", required=False, help="Create TLS connection")
@@ -202,6 +209,5 @@ if __name__ == "__main__":
                         help='Specify hostname to connect to. Either IP or DNS name')
     parser.add_argument('username', metavar='USERNAME', help='Specify username to connect with')
     args = parser.parse_args()
+    # getAverage(30)
     c = Client(args.hostname, args.username, args.p, args.s)
-
-
