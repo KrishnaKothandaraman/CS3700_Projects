@@ -23,6 +23,7 @@ def does_not_have_duplicates(word: str) -> bool:
 
 
 class Client:
+    # main class that represents a client that plays the game of Wordle. All game and connection logic is handled in here
     def __init__(self, hostname, username, port, secret=False):
         self.HOST = hostname
         self.username = username
