@@ -11,7 +11,8 @@ def error_log(msg):
     print(f"[ERROR]: {msg}")
 
 
-def does_not_have_duplicates(word):
+def does_not_have_duplicates(word: str) -> bool:
+    # returns a bool representing if a string has any duplicate letters
     hmap = set()
     for letter in word:
         if letter in hmap:
@@ -49,10 +50,12 @@ class Client:
         self.disconnect_server()
 
     def disconnect_server(self):
+        # disconnects socket connection
         assert self.sock is not None, "Cannot disconnect None Socket"
         self.sock.close()
 
     def initSocket(self):
+        # initializes socket connection to the server
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         if self.is_secret:
             self.sock = ssl.create_default_context().wrap_socket(s, server_hostname=self.HOST)
@@ -61,6 +64,7 @@ class Client:
         self.sock.connect((self.HOST, self.PORT))
 
     def startConnection(self):
+        # establishes socket connection and sends "hi" message to the server and begins game
         self.initSocket()
         assert self.sock is not None, "Socket Initialization failed"
         payload = {"type": "hello", "northeastern_username": self.username}
@@ -87,7 +91,9 @@ class Client:
             print("KeyNotFound: 'id'")
             exit(1)
 
-    def is_possible_guess(self, word):
+    def is_possible_guess(self, word: str) -> bool:
+        # returns a boolean indicating whether a guess is valid or not
+
         # word has letter that is a grey
         for letter in word:
             if letter in self.greys:
@@ -109,7 +115,8 @@ class Client:
 
         return True
 
-    def get_next_guess(self):
+    def get_next_guess(self) -> str:
+        # returns a string representing the next valid guess
         possible_words = []
         for word in wordlist:
             if self.is_possible_guess(word) and word not in self.guess_history:
@@ -121,7 +128,8 @@ class Client:
                     return word
         return possible_words[0]
 
-    def update_guess(self, history):
+    def update_guess(self, history: list):
+        # updates template for the next guess based on marks given to past guesses
         self.guess = ['-', '-', '-', '-', '-']
         for guess in history:
             greens_and_oranges = set()
@@ -141,6 +149,7 @@ class Client:
             self.guess_history.add(guess["word"])
 
     def play(self):
+        # main play function that communicates with the server to send guesses and analyze server response
         if self.guess:
             next_guess = self.get_next_guess()
         else:
@@ -183,7 +192,8 @@ class Client:
                 print("KeyNotFound: 'guesses'")
                 exit(1)
 
-    def get_resp(self):
+    def get_resp(self) -> str:
+        # returns utf-8 decoded response from server
         resp = ''
         while True:
             buf = self.sock.recv(1)
@@ -193,7 +203,8 @@ class Client:
         return resp
 
 
-def getAverage(n):
+def getAverage(n: int):
+    # gets average number of guesses for n games
     avg = 0
     for i in range(n):
         c = Client(args.hostname, args.username, args.p, args.s)
@@ -209,5 +220,5 @@ if __name__ == "__main__":
                         help='Specify hostname to connect to. Either IP or DNS name')
     parser.add_argument('username', metavar='USERNAME', help='Specify username to connect with')
     args = parser.parse_args()
-    #getAverage(30)
+    # getAverage(30)
     c = Client(args.hostname, args.username, args.p, args.s)
