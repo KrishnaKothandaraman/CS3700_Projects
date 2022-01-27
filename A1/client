@@ -75,10 +75,10 @@ class Client:
         try:
             if resp["type"] == "error":
                 error_log(resp["message"])
+                return
         except KeyError:
             print("KeyNotFound: 'type'")
             exit(1)
-
         try:
             self.id = resp["id"]
             while not self.game_over:
@@ -209,5 +209,5 @@ if __name__ == "__main__":
                         help='Specify hostname to connect to. Either IP or DNS name')
     parser.add_argument('username', metavar='USERNAME', help='Specify username to connect with')
     args = parser.parse_args()
-    # getAverage(30)
+    #getAverage(30)
     c = Client(args.hostname, args.username, args.p, args.s)
