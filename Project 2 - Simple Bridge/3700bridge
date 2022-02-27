@@ -369,6 +369,7 @@ def begin_bridge():
 
 
 def begin_with_profiling():
+    """Function to run program with profiling stats for bridge"""
     with cProfile.Profile() as p:
         begin_bridge()
     stats = pstats.Stats(p)
@@ -381,4 +382,5 @@ if __name__ == "__main__":
     parser.add_argument('bridge_id', type=str, help="Bridge ID (e.g., 02ab)")
     parser.add_argument('lan_ports', metavar='lan_port', type=int, nargs='+', help="UDP ports to connect to LANs")
     args = parser.parse_args()
+    # call begin_with_profiling instead to get profiling stats
     begin_bridge()
