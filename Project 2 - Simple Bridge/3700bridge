@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 
-import sys
+import asyncio
+import cProfile
+import pstats
 import socket
 import select
 import json
@@ -77,7 +79,7 @@ class Bridge:
         The method also takes care of filtering out the cases where no update is needed to the root or root port on the bridge
 
         """
-        port_received_on = port_id_to_portObj[port_id]
+        port_received_on = self.port_id_to_portObj[port_id]
         flush_table = port_received_on.try_to_add_new_bpdu(bpdu["message"])
         send_bpdus = False
         if flush_table:
@@ -122,11 +124,26 @@ class Bridge:
                     port_heard_on = port.id
         return best_bpdu, port_heard_on
 
+    def get_tasks(self):
+        """
+        Returns a list of port.send_bpdu() tasks
+        :return: list of tasks
+        """
+        tasks = []
+        for port in self.ports:
+            tasks.append(port.send_bpdu(self.get_bpdu(port.id).serialize()))
+        return tasks
+
     # This method sends a BPDU on all ports.  You might want to call this regularly...
     def send_bpdus(self):
+        """Async function to send bpdu"""
+        start = datetime.datetime.now()
+        # tasks = self.get_tasks()
+        # await asyncio.gather(*tasks)
         for port in self.ports:
             port.send_bpdu(self.get_bpdu(port.id).serialize())
-        print(f"Sent BPDUS", flush=True)
+        end = datetime.datetime.now()
+        print(f"Sent BPDUS, took {(end - start).total_seconds()}s", flush=True)
         self.last_bpdu_sent = datetime.datetime.now()
 
     # sends a message to a particular port or to all ports other than the one the message is received from
@@ -135,9 +152,9 @@ class Bridge:
             # send only on enabled ports
             if port.is_active():
                 if port_known and port.id == destination_port:
-                    port.send(data)
+                    port.send(json.dumps(data).encode('utf-8'))
                 elif not port_known and port_received_from != port.id:
-                    port.send(data)
+                    port.send(json.dumps(data).encode('utf-8'))
 
     def process_message(self, message, port_received_on):
         """
@@ -162,15 +179,14 @@ class Bridge:
                 return
             # port id of destination or None if it does not exist
             destination_port = self.get_port_to_send_message(destination)
-            print(f"Forwarding table: {self.forwarding_table}", flush=True)
             # if destination port does not exist in forwarding_table send to every port apart from port received from
             if destination_port < 0:
                 print(f"Broadcasting {message['dest']} / {str(message['msg_id'])} to all active ports", flush=True)
-                self.send_message(data, False, port_received_on, -1)
+                self.send_message(message, False, port_received_on, -1)
             # send to port only if destination is not the same as the port the message was received on
             elif destination_port != port_received_on:
                 print(f"Forwarding {message['dest']} / {str(message['msg_id'])} to {destination_port}", flush=True)
-                self.send_message(data, True, port_received_on, destination_port)
+                self.send_message(message, True, port_received_on, destination_port)
         if (datetime.datetime.now() - self.last_bpdu_sent).total_seconds() > 0.5:
             self.send_bpdus()
 
@@ -278,7 +294,7 @@ class Port:
         print("Sending message on port %d" % self.id, flush=True)
         self.socket.sendto(data, ('localhost', self.lan_port))
 
-    def try_to_add_new_bpdu(self, bpdu: BPDU) -> bool:
+    def try_to_add_new_bpdu(self, bpdu : dict) -> bool:
         """
         This function checks if a BPDU received is already seen before. If so, it returns False.
         Otherwise, it returns True and adds it to the list of already seen BPDUs
@@ -299,14 +315,10 @@ class Port:
             return True
 
 
-if __name__ == "__main__":
+def begin_bridge():
     # First, grab our arguments from the command line
     # bridge_id is our bridge ID ("1234" or whatever)
     # lan_ports are the local UDP ports that we use to send/receive packets on our LAN(s)
-    parser = argparse.ArgumentParser(description='CS 3700 bridge')
-    parser.add_argument('bridge_id', type=str, help="Bridge ID (e.g., 02ab)")
-    parser.add_argument('lan_ports', metavar='lan_port', type=int, nargs='+', help="UDP ports to connect to LANs")
-    args = parser.parse_args()
     # Set up our ports
     print("Bridge starting up", flush=True)
     PORTS = []
@@ -354,3 +366,19 @@ if __name__ == "__main__":
                     print(repr(e), flush=True)
         else:
             bridge.send_bpdus()
+
+
+def begin_with_profiling():
+    with cProfile.Profile() as p:
+        begin_bridge()
+    stats = pstats.Stats(p)
+    stats.sort_stats(pstats.SortKey.TIME)
+    stats.print_stats()
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='CS 3700 bridge')
+    parser.add_argument('bridge_id', type=str, help="Bridge ID (e.g., 02ab)")
+    parser.add_argument('lan_ports', metavar='lan_port', type=int, nargs='+', help="UDP ports to connect to LANs")
+    args = parser.parse_args()
+    begin_bridge()
