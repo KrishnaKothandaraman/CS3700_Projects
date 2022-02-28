@@ -45,7 +45,7 @@ class Bridge:
         # keeps track of the time when the last BPDU was sent from this bridge
         self.last_bpdu_sent = datetime.datetime.now()
         # interval to send BPDU
-        self.bpdu_interval = 0.45
+        self.bpdu_interval = 0.4
 
     # returns a serialized BPDU for this bridge from the port given as the argument
     def get_bpdu(self, port_sent_from: int) -> BPDU:
@@ -86,11 +86,11 @@ class Bridge:
 
         """
         port_received_on = self.port_id_to_portObj[port_id]
-        flush_table = port_received_on.try_to_add_new_bpdu(bpdu["message"])
+        new_bpdu = port_received_on.try_to_add_new_bpdu(bpdu["message"])
         send_bpdus = False
-        if flush_table:
+        if new_bpdu:
             self.flush_table()
-            send_bpdus = True
+            send_bpdus = bpdu["source"] != self.bridge_id
         best_bpdu_received, port_heard_on = self.best_bpdu_over_all()
         if best_bpdu_received:
             if best_bpdu_received > self.get_bpdu(0):
@@ -269,7 +269,7 @@ def begin_bridge():
     while True:
         # the subsets of the contents of the lists passed in, containing the incoming
         # data buffered and available to be read.
-        readable, _, execeptable = select.select(sockets, [], sockets, 0.45)
+        readable, _, execeptable = select.select(sockets, [], sockets, 0.4)
         """
          for each the message we received,
          if its type is "bpdu", we update the spanning tree,

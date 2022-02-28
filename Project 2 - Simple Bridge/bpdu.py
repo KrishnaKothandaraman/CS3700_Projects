@@ -22,7 +22,7 @@ class BPDU:
 
     # returns bool indicating whether a BPDU has expired
     def is_expired(self) -> bool:
-        return (datetime.datetime.now() - self.created_on).total_seconds() > 1
+        return (datetime.datetime.now() - self.created_on).total_seconds() > 0.8
 
     # returns the bpdu object given
     def unserialize(message):
