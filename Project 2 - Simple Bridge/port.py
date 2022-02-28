@@ -7,6 +7,7 @@ import socket
 
 # Enumeration of various Port states
 from enum import Enum
+from typing import Optional
 
 from bpdu import BPDU
 
@@ -46,11 +47,9 @@ class Port:
         self.bpdus_received = list(filter(self.is_valid_bpdu, self.bpdus_received))
 
     # return the best bpdu that this port heard
-    def get_best_bpdu(self):
-        if len(self.bpdus_received) > 0:
+    def get_best_bpdu(self) -> Optional[BPDU]:
+        if self.has_received_bpdu():
             return sorted(self.bpdus_received)[0]
-        else:
-            return BPDU(args.bridge_id, 0, args.bridge_id, self.id)
 
     # convenience method that returns list of serialized BPDUs for debugging
     def return_serialized_list(self):
@@ -62,7 +61,7 @@ class Port:
 
         :return: True if port has heard a bpdu, False otherwise
         """
-        return len(self.bpdus_received) == 0
+        return len(self.bpdus_received) > 0
 
     # This method sends a BPDU on this port.  Right now, it only sends a
     # BPDU that says this bridge believes its the root; obviously, this
