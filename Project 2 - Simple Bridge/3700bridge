@@ -7,7 +7,7 @@ import select
 import json
 import argparse
 import datetime
-from typing import Optional
+from typing import Optional, List, Tuple
 
 from bpdu import BPDU
 from port import Port, PortStatus
@@ -21,7 +21,7 @@ def error_log(error: str):
 # This object represents a bridge, It is responsible for building the minimum spanning tree.
 
 class Bridge:
-    ports: list[Port]
+    ports: List[Port]
 
     # init bridge object with data for first BPDU. At the start, bridge believes it is the root
     # and cost to root is 0 and all ports are enabled
@@ -123,7 +123,7 @@ class Bridge:
         for port in self.ports:
             port.status = PortStatus.DESIGNATED
 
-    def best_bpdu_over_all(self) -> Optional[tuple[BPDU, int]]:
+    def best_bpdu_over_all(self) -> Optional[Tuple[BPDU, int]]:
         """
         returns the best bpdu that this bridge has heard and the port it was heard on. Returns None if no BPDU has been
         heard
