@@ -12,6 +12,6 @@ Detailed README and source code for each individual project can be found in thei
 
 #### Project 2
 - Build a Bridge that is capable of executing the spanning tree algorithm and building a forwarding table to be able to 
-forward messages from hosts. 
-- Robust implementation that can handle changes to the network like failure of bridges and creation of bridges.
+forward frames between its various ports.
+- Robust implementation that can handle changes to the network like failure of bridges and creation of bridges by automatically reconfiguring the spanning tree.
 - Scalable with the addition of extra LANs and Bridges.
