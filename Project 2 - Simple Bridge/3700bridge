@@ -3,13 +3,14 @@
 import asyncio
 import cProfile
 import pstats
-import socket
 import select
 import json
 import argparse
 import datetime
-from enum import Enum
+from typing import Optional
+
 from bpdu import BPDU
+from port import Port, PortStatus
 
 
 # accepts an error param and prints a debug log
@@ -18,7 +19,10 @@ def error_log(error: str):
 
 
 # This object represents a bridge, It is responsible for building the minimum spanning tree.
+
 class Bridge:
+    ports: list[Port]
+
     # init bridge object with data for first BPDU. At the start, bridge believes it is the root
     # and cost to root is 0 and all ports are enabled
     def __init__(self, ports: list, bridge_id: str, socket_to_port: dict, port_id_to_portObj: dict):
@@ -40,6 +44,8 @@ class Bridge:
         self.port_id_to_portObj = port_id_to_portObj
         # keeps track of the time when the last BPDU was sent from this bridge
         self.last_bpdu_sent = datetime.datetime.now()
+        # interval to send BPDU
+        self.bpdu_interval = 0.45
 
     # returns a serialized BPDU for this bridge from the port given as the argument
     def get_bpdu(self, port_sent_from: int) -> BPDU:
@@ -49,21 +55,21 @@ class Bridge:
         """
         Update ports as designated port if they are not the root port and their best BPDU is better than all
         the BPDUs heard by them
-        Disables all non designated and non root ports
+        Disables all non designated and non-root ports
         :return: None
         """
         for port in self.ports:
-            if port.status != PortStatus.ROOT:
-                designated = False
-                bridge_best_bpdu = self.get_bpdu(port.id)
-                if len(port.bpdus_received) == 0 or bridge_best_bpdu < port.get_best_bpdu():
-                    designated = True
-                if not designated:
-                    port.status = PortStatus.DISABLED
-                    print(f"Disabled port {port.id}", flush=True)
-                else:
-                    port.status = PortStatus.DESIGNATED
-                    print(f"Designated port {port.id}", flush=True)
+            if port.status == PortStatus.ROOT:
+                continue
+            bridge_best_bpdu = self.get_bpdu(port.id)
+            port_best_bpdu = port.get_best_bpdu()
+            # a port is disabled if it has heard a BPDU and if it is worse than the bridges best one
+            if port.has_received_bpdu() and bridge_best_bpdu > port_best_bpdu:
+                port.status = PortStatus.DISABLED
+                print(f"Disabled port {port.id}", flush=True)
+            else:
+                port.status = PortStatus.DESIGNATED
+                print(f"Designated port {port.id}", flush=True)
 
     # resets forwarding table
     def flush_table(self):
@@ -97,7 +103,7 @@ class Bridge:
                         send_bpdus = True
                     self.update_root_port(best_bpdu_received, port_heard_on)
             self.update_designated_port_status()
-            if send_bpdus or (datetime.datetime.now() - self.last_bpdu_sent).total_seconds() > 0.5:
+            if send_bpdus or self.bpdu_interval_expired():
                 self.send_bpdus()
         else:
             self.set_all_ports_as_designated()
@@ -105,23 +111,34 @@ class Bridge:
             self.root_cost = 0
             self.send_bpdus()
 
+    def bpdu_interval_expired(self) -> bool:
+        """
+        Checks if the bridges BPDU hasn't been sent for longer than the preset interval
+        :return: True if BPDU needs to be sent, False otherwise
+        """
+        return (datetime.datetime.now() - self.last_bpdu_sent).total_seconds() > self.bpdu_interval
+
     # sets all ports as designated ports
     def set_all_ports_as_designated(self):
         for port in self.ports:
             port.status = PortStatus.DESIGNATED
 
-    # returns the best bpdu that this bridge has heard and the port it was heard on. Returns None if no BPDU has been
-    # heard
-    def best_bpdu_over_all(self):
+    def best_bpdu_over_all(self) -> Optional[tuple[BPDU, int]]:
+        """
+        returns the best bpdu that this bridge has heard and the port it was heard on. Returns None if no BPDU has been
+        heard
+        :return: (BPDU, int) if a best BPDU exists or None
+        """
         best_bpdu = None
         port_heard_on = None
         for port in self.ports:
             port.clean_bpdus()
-            if len(port.bpdus_received) > 0:
-                port_best_bpdu = port.get_best_bpdu()
-                if best_bpdu is None or port_best_bpdu < best_bpdu:
-                    best_bpdu = port_best_bpdu
-                    port_heard_on = port.id
+            if not port.has_received_bpdu():
+                continue
+            port_best_bpdu = port.get_best_bpdu()
+            if best_bpdu is None or port_best_bpdu < best_bpdu:
+                best_bpdu = port_best_bpdu
+                port_heard_on = port.id
         return best_bpdu, port_heard_on
 
     def get_tasks(self):
@@ -187,7 +204,7 @@ class Bridge:
             elif destination_port != port_received_on:
                 print(f"Forwarding {message['dest']} / {str(message['msg_id'])} to {destination_port}", flush=True)
                 self.send_message(message, True, port_received_on, destination_port)
-        if (datetime.datetime.now() - self.last_bpdu_sent).total_seconds() > 0.5:
+        if self.bpdu_interval_expired():
             self.send_bpdus()
 
     # update port of source with timestamp
@@ -230,96 +247,8 @@ class Bridge:
         print(f"Root port: {port_heard_on}", flush=True)
 
 
-# Enumeration of various Port states
-class PortStatus(Enum):
-    DISABLED = 0
-    ROOT = 1
-    DESIGNATED = 2
-
-
-# Definition of a port
-class Port:
-    def __init__(self, id, lan_port):
-        """
-        This class represents a port on a bridge
-        :param id: 0-indexed id of the port
-        :param lan_port: UDP port number of the LAN
-        """
-        self.id = id
-        self.lan_port = lan_port
-        self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.socket.bind(('localhost', 0))
-        # list of bpdus received by this port
-        self.bpdus_received = []
-        # status of this port. Either designated, root or disabled
-        self.status = PortStatus.DESIGNATED
-
-    # returns a bool indicating if this port is active or not d
-    def is_active(self) -> bool:
-        return self.status != PortStatus.DISABLED
-
-    # returns True if bpdu has not expired and False if it has
-    def is_valid_bpdu(self, bpdu: BPDU) -> bool:
-        return not bpdu.is_expired()
-
-    # cleans list of bpdus heard to remove expired ones
-    def clean_bpdus(self):
-        self.bpdus_received = list(filter(self.is_valid_bpdu, self.bpdus_received))
-
-    # return the best bpdu that this port heard
-    def get_best_bpdu(self):
-        if len(self.bpdus_received) > 0:
-            return sorted(self.bpdus_received)[0]
-        else:
-            return BPDU(args.bridge_id, 0, args.bridge_id, self.id)
-
-    # convenience method that returns list of serialized BPDUs for debugging
-    def return_serialized_list(self):
-        return list(map(lambda p: p.serialize(), self.bpdus_received))
-
-    # This method sends a BPDU on this port.  Right now, it only sends a
-    # BPDU that says this bridge believes its the root; obviously, this
-    # will need to be updated.
-    def send_bpdu(self, bpdu):
-        self.send(json.dumps({"source": bpdu["id"],
-                              "dest": "ffff",
-                              "msg_id": 0,
-                              "type": "bpdu",
-                              "message": bpdu
-                              }).encode('utf-8'))
-
-    # This method sends the provided byte array "data" to the LAN, using the
-    # UDP connection.
-    def send(self, data):
-        print("Sending message on port %d" % self.id, flush=True)
-        self.socket.sendto(data, ('localhost', self.lan_port))
-
-    def try_to_add_new_bpdu(self, bpdu : dict) -> bool:
-        """
-        This function checks if a BPDU received is already seen before. If so, it returns False.
-        Otherwise, it returns True and adds it to the list of already seen BPDUs
-
-        :param bpdu: BPDU object to be added to the port
-        :return: Boolean True if BPDU has never been seen before, False if BPDU has been seen before
-        """
-        self.clean_bpdus()
-        BPDU_obj = BPDU(bpdu["root"], bpdu["cost"], bpdu["id"], bpdu["port"])
-        if BPDU_obj in self.bpdus_received:
-            # remove old one
-            self.bpdus_received.remove(BPDU_obj)
-            # add new one with new time
-            self.bpdus_received.append(BPDU_obj)
-            return False
-        else:
-            self.bpdus_received.append(BPDU_obj)
-            return True
-
-
 def begin_bridge():
-    # First, grab our arguments from the command line
-    # bridge_id is our bridge ID ("1234" or whatever)
-    # lan_ports are the local UDP ports that we use to send/receive packets on our LAN(s)
-    # Set up our ports
+    """Starts bridge and listens for messages on ports"""
     print("Bridge starting up", flush=True)
     PORTS = []
     port_id_to_portObj = {}
@@ -340,7 +269,7 @@ def begin_bridge():
     while True:
         # the subsets of the contents of the lists passed in, containing the incoming
         # data buffered and available to be read.
-        readable, _, execeptable = select.select(sockets, [], sockets, 0.5)
+        readable, _, execeptable = select.select(sockets, [], sockets, 0.45)
         """
          for each the message we received,
          if its type is "bpdu", we update the spanning tree,
@@ -372,6 +301,7 @@ def begin_with_profiling():
     """Function to run program with profiling stats for bridge"""
     with cProfile.Profile() as p:
         begin_bridge()
+    print("profiling done")
     stats = pstats.Stats(p)
     stats.sort_stats(pstats.SortKey.TIME)
     stats.print_stats()
