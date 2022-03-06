@@ -1,30 +1,56 @@
 #!/usr/bin/env -S python3 -u
 
 import argparse, socket, time, json, select, struct, sys, math
+from dataclasses import dataclass
+from enum import Enum, auto
+from typing import List, Optional
+
+from network import Network
+from table import Table
+
+
+def our_addr(dst):
+    quads = list(int(qdn) for qdn in dst.split('.'))
+    quads[3] = 1
+    return "%d.%d.%d.%d" % (quads[0], quads[1], quads[2], quads[3])
+
+
+class MessageTypes(Enum):
+    UPDATE = auto()
+    WITHDRAW = auto()
+
+
+"""
+    FOR MILESTONE 1 WE NEED TO
+    1. Write table class to handle basic update and withdraw.
+    2. Write network class to store in table
+    3. Write dump table method to serialize all networks in the table
+    4. Forward all update/withdraw messages to other neighbours. Can assume all neighbours are Customers so blindly 
+       forward
+"""
 
 
 class Router:
     relations = {}
     sockets = {}
     ports = {}
+    table: Table
 
+    # TODO: Improve data structures used to store neighbours.
     def __init__(self, asn, connections):
         print("Router at AS %s starting up" % asn)
         self.asn = asn
+        self.update_messages = []
+        self.withdraw_messages = []
+        self.table = Table()
         for relationship in connections:
             port, neighbor, relation = relationship.split("-")
-
             self.sockets[neighbor] = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             self.sockets[neighbor].bind(('localhost', 0))
             self.ports[neighbor] = int(port)
             self.relations[neighbor] = relation
             self.send(neighbor,
-                      json.dumps({"type": "handshake", "src": self.our_addr(neighbor), "dst": neighbor, "msg": {}}))
-
-    def our_addr(self, dst):
-        quads = list(int(qdn) for qdn in dst.split('.'))
-        quads[3] = 1
-        return "%d.%d.%d.%d" % (quads[0], quads[1], quads[2], quads[3])
+                      json.dumps({"type": "handshake", "src": our_addr(neighbor), "dst": neighbor, "msg": {}}))
 
     def send(self, network, message):
         self.sockets[network].sendto(message.encode('utf-8'), ('localhost', self.ports[network]))
@@ -33,16 +59,150 @@ class Router:
         while True:
             socks = select.select(self.sockets.values(), [], [], 0.1)[0]
             for conn in socks:
-                k, addr = conn.recvfrom(65535)
-                srcif = None
-                for sock in self.sockets:
-                    if self.sockets[sock] == conn:
-                        srcif = sock
+                received_message, addr = conn.recvfrom(65535)
+                message_source_network = None
+                for network_name, sock in self.sockets.items():
+                    if sock == conn:
+                        message_source_network = network_name
                         break
-                msg = k.decode('utf-8')
+                msg = received_message.decode('utf-8')
 
-                print("Received message '%s' from %s" % (msg, srcif))
+                self.process_message(msg, message_source_network)
+
+                print(f"Received message {msg} from {message_source_network} on {self.ports[message_source_network]}")
         return
+
+    # takes in the received message, and the IP source
+    def process_message(self, msg, message_source_network) -> None:
+        message = json.loads(msg)
+
+        # update the table with the given update-message
+        if message["type"] == "update":
+            self.handle_update_message(message)
+
+        # update the table with the given withdraw-message
+        elif message["type"] == "withdraw":
+            self.handle_withdraw_message(message, message_source_network)
+
+        # TODO: CARE ABOUT RELATION WITH PEER
+        elif message["type"] == "data":
+            self.handle_data_message(message, message_source_network)
+
+        elif message["type"] == "dump":
+            self.handle_dump_message(message)
+
+    def handle_update_message(self, message: dict) -> None:
+        """
+        Performs logic to update forwarding table and forward messages to peers.
+        :param message: Message as decoded JSON
+        :return:
+        """
+        update_network_object = Network(message)
+        self.update_messages.append(message)
+        self.table.add_entry(message)
+
+        relation = self.relations[message["src"]]
+
+        # message from a customer: send updates to all other neighbors
+        # should only include the network, netmask, and ASPath.
+        if relation == "cust":
+            self.forward_update_message(update_network_object, False)
+        # message from a peer or a provider: only send updates to your customers
+        elif relation == "prov" or relation == "peer":
+            self.forward_update_message(update_network_object, True)
+
+    def handle_withdraw_message(self, message: dict, message_source_network: str) -> None:
+        """
+        Performs logic to delete entry from table and forward to peers
+        :param message: Decoded JSON message
+        :param message_source_network: Network that we receieved the message from
+        """
+        # 1: save a copy of the revocation
+        self.withdraw_messages.append(message)
+
+        # 2: remove the dead entry from the forwarding table
+        self.table.withdraw(message)
+        relation = self.relations[message["src"]]
+
+        # 3: possibly send copies of the revocation to other neighboring routers
+
+        # message from a customer: send updates to all other neighbors
+        # should only include the network, netmask, and ASPath.
+
+        if relation == "cust":
+            self.forward_withdraw_message(message, message_source_network, False)
+        # message from a peer or a provider: only send updates to your customers
+        elif relation == "prov" or relation == "peer":
+            self.forward_withdraw_message(message, message_source_network, True)
+
+    def handle_dump_message(self, message: dict) -> None:
+        """
+        Helper function to handle dump message. Sends serialized forwarding table back to source
+        :param message: Message received as decoded JSON
+        :return: None
+        """
+        serialized_table = self.table.get_serialized_table()
+        dump_table_msg = {
+            "src": our_addr(message["src"]),
+            "dst": message["src"],
+            "type": "table",
+            "msg": serialized_table
+        }
+        self.send(message["src"], json.dumps(dump_table_msg))
+
+    def handle_data_message(self, message: dict, network_received_from: str) -> None:
+        """
+        Logic to handle data message
+        :param message: Message received as decoded JSON
+        :param network_received_from: the network that we receive the message from
+        """
+        neighbour_networks = self.table.find_route(message["dst"])
+        no_route_message = json.dumps({
+            "src": our_addr(message["src"]),
+            "dst": message["src"],
+            "type": "no route",
+            "msg": {}
+        })
+        incoming_relation = self.relations[network_received_from]
+        if neighbour_networks:
+            message_to_send = json.dumps(message)
+            send_message_to = sorted(neighbour_networks)[0].peer
+            outgoing_relation = self.relations[send_message_to]
+        else:
+            message_to_send = no_route_message
+            send_message_to = network_received_from
+            outgoing_relation = self.relations[network_received_from]
+
+        if incoming_relation == "cust":
+            self.send(send_message_to, message_to_send)
+        elif incoming_relation != "cust" and outgoing_relation == "cust":
+            self.send(send_message_to, message_to_send)
+        elif (incoming_relation != "cust") and (outgoing_relation != "cust"):
+            # Drop the message: router does not forward data for free
+            # send no route back to the src
+            self.send(network_received_from, no_route_message)
+
+    def forward_update_message(self, network_obj: Network, send_only_to_customers: bool) -> None:
+        for neighbour in self.sockets:
+            json_message = json.dumps({"type": "update", "src": our_addr(neighbour), "dst": neighbour,
+                                       "msg": network_obj.serialize_for_forwarding(self.asn)})
+            if neighbour != network_obj.peer:
+                if send_only_to_customers:
+                    if self.relations[neighbour] == "cust":
+                        self.send(neighbour, json_message)
+                else:
+                    self.send(neighbour, json_message)
+
+    def forward_withdraw_message(self, message: dict, message_source_network, send_only_to_customers: bool) -> None:
+        for neighbour in self.sockets:
+            message["src"] = our_addr(neighbour)
+            message["dst"] = neighbour
+            if neighbour != message_source_network:
+                if send_only_to_customers:
+                    if self.relations[neighbour] == "cust":
+                        self.send(neighbour, json.dumps(message))
+                else:
+                    self.send(neighbour, json.dumps(message))
 
 
 if __name__ == "__main__":

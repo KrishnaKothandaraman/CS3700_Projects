@@ -33,13 +33,17 @@ def runTest(config):
   print("%s" % ("Test: %s" % (config)).ljust(60, ' '), end='')
 
   result = subprocess.check_output([os.path.join(os.getcwd(), RUN_SCRIPT_NAME), os.path.join(CONFIG_DIR, config)]).decode('utf-8')
-  
+
   pattern = re.compile("Simulation complete. Errors detected\n\n(.*)", re.DOTALL)
   m = re.search(pattern, result)
   if m:
     print("[FAIL]\n%s" % m.group(1))
   else:
-    print("[PASS]")
+    pattern = re.compile("Simulation complete. No errors detected; congratulations", re.DOTALL)
+    if re.search(pattern, result):
+      print("[PASS]")
+    else:
+      print("[FAIL]\n%s" % result)
 
 print("Milestone tests")
 runTest("1-1-simple-send.conf")
