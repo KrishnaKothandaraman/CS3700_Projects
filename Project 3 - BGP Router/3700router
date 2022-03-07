@@ -118,10 +118,18 @@ class Router:
         :param message_source_network: Network that we receieved the message from
         """
         # 1: save a copy of the revocation
-        self.withdraw_messages.append(message)
+        messages_to_pop = []
+        for withdrawal in message["msg"]:
+            for i, update_message in enumerate(self.update_messages):
+                if update_message["src"] == message["src"] and update_message["msg"]["network"] == withdrawal["network"] and update_message["msg"]["netmask"] == withdrawal["netmask"]:
+                    messages_to_pop.append(update_message)
+
+        for update_message in messages_to_pop:
+            print(f"Removing {update_message}")
+            self.update_messages.remove(update_message)
 
         # 2: remove the dead entry from the forwarding table
-        self.table.withdraw(message)
+        self.table.rebuild_table(self.update_messages)
         relation = self.relations[message["src"]]
 
         # 3: possibly send copies of the revocation to other neighboring routers

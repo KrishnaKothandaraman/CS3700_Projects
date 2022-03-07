@@ -1,14 +1,20 @@
+import copy
+
 from network import Network
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional, Set
 import ip
 
 
 # represents the routing table
 class Table:
     routing_table: List[Tuple[Network, str]]
+    aggregate_result: List[Tuple[Network, Tuple[Network, Network]]]
+    aggregated_networks: Set[Network]
 
     def __init__(self):
         self.routing_table = []
+        self.aggregate_result = []
+        self.aggregated_networks = set()
 
     # add an entry to the table with given message
     def add_entry(self, message):
@@ -49,14 +55,20 @@ class Table:
             print(
                 f"{network.serialize()} Aggregatable networks: {self.routing_table[aggregate_network][0].serialize()}")
 
-        for network, adjacent_network in aggregation_map.items():
-            if not adjacent_network:
+        for network, adjacent_network_index in aggregation_map.items():
+            if not adjacent_network_index:
                 continue
-            self.routing_table.pop(adjacent_network)
+            original_network = copy.deepcopy(self.routing_table[network][0])
+            adjacent_network = self.routing_table[adjacent_network_index][0]
+            print(f"Aggregated {original_network, adjacent_network}")
+
+            self.routing_table.pop(adjacent_network_index)
 
             self.routing_table[network][0].network = ip.aggregate_network(self.routing_table[network][0].network,
                                                                           self.routing_table[network][0].netmask)
             self.routing_table[network][0].netmask = ip.aggregate_netmask(self.routing_table[network][0].netmask)
+
+            self.aggregate_result.append((self.routing_table[network][0], (original_network, adjacent_network)))
 
         if len(aggregation_map) > 0:
             self.aggregate()
@@ -78,11 +90,20 @@ class Table:
     # remove the dead entry from the forwarding table
     def withdraw(self, message):
         networks_to_remove = message["msg"]
-        for route in self.routing_table:
-            if route[1] == message["src"]:
-                for network in networks_to_remove:
-                    if route[0].network == network["network"] and route[0].netmask == network["netmask"]:
-                        self.routing_table.remove(route)
+        for route, peer in self.routing_table:
+            for network in networks_to_remove:
+                if route.network == network["network"] and route.netmask == network["netmask"]:
+                    self.routing_table.remove((route, peer))
+
+        self.aggregate()
+
+    def rebuild_table(self, update_messages) -> None:
+        self.routing_table = []
+
+        for message in update_messages:
+            self.add_entry(message)
+
+        self.aggregate()
 
     def find_route(self, destination: str) -> List[Network]:
         """

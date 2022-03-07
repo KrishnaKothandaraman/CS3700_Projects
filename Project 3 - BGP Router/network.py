@@ -1,3 +1,4 @@
+import copy
 from dataclasses import dataclass
 from enum import Enum, auto
 from typing import List, Optional, Tuple
@@ -43,6 +44,12 @@ class Network:
             return True
         else:
             return False
+
+    def __eq__(self, other):
+        return self.__dict__ == other.__dict__
+
+    def __repr__(self):
+        return f"{self.__dict__}"
 
     def have_same_attributes(self, other) -> bool:
         """
@@ -120,5 +127,5 @@ if __name__ == "__main__":
         }
     }
     n1 = Network(a)
-    n2 = Network(b)
+    n2 = copy.deepcopy(n1)
     print(n1 == n2)
