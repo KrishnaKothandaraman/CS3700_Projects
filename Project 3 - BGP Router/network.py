@@ -44,20 +44,24 @@ class Network:
         else:
             return False
 
-    def __eq__(self, other):
+    def have_same_attributes(self, other) -> bool:
+        """
+        Returns True if two networks have same attributes
+        :param other: Other network
+        :return:
+        """
         return self.peer == other.peer and self.netmask == other.netmask and self.localpref == other.localpref \
-               and (self.selfOrigin == other.selfOrigin) and len(self.ASPath) == len(other.ASPath) \
-               and self.compareOrigins(other) == 0
-        # and ip.compareIP(self.peer, other.peer)
+            and (self.selfOrigin == other.selfOrigin) and len(self.ASPath) == len(other.ASPath) \
+            and self.compareOrigins(other) == 0
 
-    def serialize(self):
+    def serialize(self) -> dict:
         """
         Method returns a dictionary representation of the entire class. Useful for dump message
         :return: dictionary representation of this class
         """
         return self.__dict__
 
-    def serialize_for_forwarding(self, asn):
+    def serialize_for_forwarding(self, asn: int) -> dict:
         """
         Call this method to return dictionary for forwarding update message to neighbours
         :return: dictionary representation of non private fields of this network
@@ -75,7 +79,7 @@ class Network:
 
     def compareOrigins(self, other) -> int:
         """
-        C-style comparison operator. 0 implies equals, 1 implies self < other and -1 implies other < self
+        C-style comparison operator. 0 implies equals, 1 implies self > other and -1 implies self < other
         :param other: Instance of type Network
         :return: int
         """
