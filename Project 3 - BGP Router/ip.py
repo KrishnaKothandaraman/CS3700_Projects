@@ -1,4 +1,3 @@
-
 class InvalidIPException(Exception):
     def __init__(self, ip: str, message: str) -> None:
         self.ip = ip
@@ -142,31 +141,16 @@ def binary_to_dot_ip(binary_ip: str):
     :param binary_ip:
     :return:
     """
-    result = ""
-    accu_num = 0  # keep track of the number in base 10
-    accu_str = ""  # keep track of str in bytes
+    result = []
     for i in range(4):
-        for j in range(8):
-            accu_str += binary_ip[j + i * 8]
-        # int("01010101", 2): converting binary to integer
-        accu_num += int(accu_str, 2)
-        if i == 3:
-            result += str(accu_num)
-        else:
-            result += str(accu_num) + "."
-        accu_str = ""
-        accu_num = 0
-    return result
+        octet = binary_ip[i * 8: (i + 1) * 8]
+        result.append(str(int(octet, 2)))
+    return ".".join(result)
 
 
 if __name__ == "__main__":
     ip1 = "192.168.2.0"
     netmask = "255.255.255.0"
     ip2 = "192.168.3.0"
-    print(are_adjacent(ip1, netmask, ip2, netmask))
-    print(aggregate_network(ip1, netmask))
-    print(aggregate_netmask(netmask))
-
-    # print(compareIP(ip1, ip2))
-    # ip3 = tobin("128.a.0.982")
+    print(binary_to_dot_ip(tobin(ip2)))
     CIDR = cidr_length("255.128.0.0")

@@ -52,15 +52,12 @@ class Table:
             if not aggregate_network:
                 continue
             aggregation_map[i] = aggregate_network
-            print(
-                f"{network.serialize()} Aggregatable networks: {self.routing_table[aggregate_network][0].serialize()}")
 
         for network, adjacent_network_index in aggregation_map.items():
             if not adjacent_network_index:
                 continue
             original_network = copy.deepcopy(self.routing_table[network][0])
             adjacent_network = self.routing_table[adjacent_network_index][0]
-            print(f"Aggregated {original_network, adjacent_network}")
 
             self.routing_table.pop(adjacent_network_index)
 
