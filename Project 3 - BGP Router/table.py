@@ -98,6 +98,11 @@ class Table:
         self.aggregate()
 
     def rebuild_table(self, update_messages) -> None:
+        """
+        Resets routing table and rebuilds it with the list of update messages provided
+        :param update_messages: List of update messages
+        :return: None
+        """
         self.routing_table = []
 
         for message in update_messages:

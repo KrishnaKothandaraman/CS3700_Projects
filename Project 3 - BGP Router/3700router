@@ -74,6 +74,11 @@ class Router:
 
     # takes in the received message, and the IP source
     def process_message(self, msg, message_source_network) -> None:
+        """
+        This method accepts a message and executes the method corresponding to the message type
+        :param msg: Message received
+        :param message_source_network: Peer IP this message was received from
+        """
         message = json.loads(msg)
 
         # update the table with the given update-message
@@ -128,7 +133,6 @@ class Router:
             print(f"Removing {update_message}")
             self.update_messages.remove(update_message)
 
-        # 2: remove the dead entry from the forwarding table
         self.table.rebuild_table(self.update_messages)
         relation = self.relations[message["src"]]
 
@@ -191,6 +195,11 @@ class Router:
             self.send(network_received_from, no_route_message)
 
     def forward_update_message(self, network_obj: Network, send_only_to_customers: bool) -> None:
+        """
+        Forwards update messages
+        :param network_obj: Network object representing update message
+        :param send_only_to_customers: Boolean flag representing whether this message has to only be sent to customers
+        """
         for neighbour in self.sockets:
             json_message = json.dumps({"type": "update", "src": our_addr(neighbour), "dst": neighbour,
                                        "msg": network_obj.serialize_for_forwarding(self.asn)})
@@ -202,6 +211,12 @@ class Router:
                     self.send(neighbour, json_message)
 
     def forward_withdraw_message(self, message: dict, message_source_network, send_only_to_customers: bool) -> None:
+        """
+        Forwards withdraw messages
+        :param message: Withdraw message
+        :param message_source_network: Source IP of peer
+        :param send_only_to_customers: Boolean flag representing whether this message has to only be sent to customers
+        """
         for neighbour in self.sockets:
             message["src"] = our_addr(neighbour)
             message["dst"] = neighbour
