@@ -84,16 +84,6 @@ class Table:
                 return None
         return adjacent_network
 
-    # remove the dead entry from the forwarding table
-    def withdraw(self, message):
-        networks_to_remove = message["msg"]
-        for route, peer in self.routing_table:
-            for network in networks_to_remove:
-                if route.network == network["network"] and route.netmask == network["netmask"]:
-                    self.routing_table.remove((route, peer))
-
-        self.aggregate()
-
     def rebuild_table(self, update_messages) -> None:
         """
         Resets routing table and rebuilds it with the list of update messages provided

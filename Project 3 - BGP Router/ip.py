@@ -1,3 +1,4 @@
+# Custom exception classes for clean error handling.
 class InvalidIPException(Exception):
     def __init__(self, ip: str, message: str) -> None:
         self.ip = ip
@@ -146,11 +147,3 @@ def binary_to_dot_ip(binary_ip: str):
         octet = binary_ip[i * 8: (i + 1) * 8]
         result.append(str(int(octet, 2)))
     return ".".join(result)
-
-
-if __name__ == "__main__":
-    ip1 = "192.168.2.0"
-    netmask = "255.255.255.0"
-    ip2 = "192.168.3.0"
-    print(binary_to_dot_ip(tobin(ip2)))
-    CIDR = cidr_length("255.128.0.0")

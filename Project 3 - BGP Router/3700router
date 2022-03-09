@@ -8,27 +8,11 @@ from typing import List, Optional
 from network import Network
 from table import Table
 
-
+# method given in the starter code.
 def our_addr(dst):
     quads = list(int(qdn) for qdn in dst.split('.'))
     quads[3] = 1
     return "%d.%d.%d.%d" % (quads[0], quads[1], quads[2], quads[3])
-
-
-class MessageTypes(Enum):
-    UPDATE = auto()
-    WITHDRAW = auto()
-
-
-"""
-    FOR MILESTONE 1 WE NEED TO
-    1. Write table class to handle basic update and withdraw.
-    2. Write network class to store in table
-    3. Write dump table method to serialize all networks in the table
-    4. Forward all update/withdraw messages to other neighbours. Can assume all neighbours are Customers so blindly 
-       forward
-"""
-
 
 class Router:
     relations = {}
@@ -36,7 +20,6 @@ class Router:
     ports = {}
     table: Table
 
-    # TODO: Improve data structures used to store neighbours.
     def __init__(self, asn, connections):
         print("Router at AS %s starting up" % asn)
         self.asn = asn
@@ -72,7 +55,6 @@ class Router:
                 print(f"Received message {msg} from {message_source_network} on {self.ports[message_source_network]}")
         return
 
-    # takes in the received message, and the IP source
     def process_message(self, msg, message_source_network) -> None:
         """
         This method accepts a message and executes the method corresponding to the message type

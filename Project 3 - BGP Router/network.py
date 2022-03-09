@@ -97,35 +97,3 @@ class Network:
         elif self.origin == "EGP" and other.origin == "UNK":
             return 1
         return -1
-
-
-if __name__ == "__main__":
-    a = {
-        "type": "update",
-        "src": "192.168.0.2",
-        "dst": "192.168.0.1",
-        "msg": {
-            "network": "192.168.0.0",
-            "netmask": "255.255.255.0",
-            "localpref": 150,
-            "ASPath": [1, 3],
-            "origin": "IGP",
-            "selfOrigin": False
-        }
-    }
-    b = {
-        "type": "update",
-        "src": "192.168.0.2",
-        "dst": "192.168.0.1",
-        "msg": {
-            "network": "192.168.0.0",
-            "netmask": "255.255.255.0",
-            "localpref": 150,
-            "ASPath": [1, 2],
-            "origin": "EGP",
-            "selfOrigin": False
-        }
-    }
-    n1 = Network(a)
-    n2 = copy.deepcopy(n1)
-    print(n1 == n2)
