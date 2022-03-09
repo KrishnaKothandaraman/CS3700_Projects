@@ -4,14 +4,24 @@ This is a documentation of the assignments I did for CS3700 at Northeastern Univ
 
 Detailed README and source code for each individual project can be found in their respective subdirectories.
 
+All the code here is built to be elegant, concise and readable.
+
 ### Projects Summary
 
-#### Project 1
+#### Project 1 - Wordle Bot
 - Implemented a Client to play the game of Wordle with a Server using a TCP connection with support for TLS encryption
 - Developed a guessing strategy capable of guessing the answer in under 6 tries on average.
 
-#### Project 2
-- Build a Bridge that is capable of executing the spanning tree algorithm and building a forwarding table to be able to 
+#### Project 2 - Simple Bridge
+- Implemented a Bridge that is capable of executing the spanning tree algorithm and building a forwarding table to be able to 
 forward frames between its various ports.
 - Robust implementation that can handle changes to the network like failure of bridges and creation of bridges by automatically reconfiguring the spanning tree.
 - Scalable with the addition of extra LANs and Bridges.
+
+#### Project 3 - BGP router
+- Created a Router that implements the Border Gateway Protocol that builds and maintains a forwarding table capable of
+forwarding packets to their destination IP.
+- Router is capable of longest prefix matching, aggregation of IPs and disaggregation of IPs
+- Router is smart enough to handle relationships with peers, providers and customers and only forwards data when it is
+economically feasible for the router.
+
