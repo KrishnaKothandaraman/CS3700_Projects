@@ -1,21 +1,27 @@
 #!/usr/bin/env -S python3 -u
 
 import argparse, socket, time, json, select, struct, sys, math
+from typing import Dict
+from window import Window
 
 DATA_SIZE = 1375
+MAX_WINDOW_SIZE = 4
+
+
+def log(message):
+    sys.stderr.write(message + "\n")
+    sys.stderr.flush()
+
 
 class Sender:
     def __init__(self, host, port):
         self.host = host
         self.remote_port = int(port)
-        self.log("Sender starting up using port %s" % self.remote_port)
+        log("Sender starting up using port %s" % self.remote_port)
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.socket.bind(('0.0.0.0', 0))
         self.waiting = False
-
-    def log(self, message):
-        sys.stderr.write(message + "\n")
-        sys.stderr.flush()
+        self.window = Window(MAX_WINDOW_SIZE)
 
     def send(self, message):
         self.socket.sendto(json.dumps(message).encode('utf-8'), (self.host, self.remote_port))
@@ -30,20 +36,18 @@ class Sender:
                     k, addr = conn.recvfrom(65535)
                     msg = k.decode('utf-8')
 
-                    self.log("Received message '%s'" % msg)
+                    log("Received message '%s'" % msg)
                     self.waiting = False
                 elif conn == sys.stdin:
                     data = sys.stdin.read(DATA_SIZE)
                     if len(data) == 0:
-                        self.log("All done!")
+                        log("All done!")
                         sys.exit(0)
-
-                    msg = { "type": "msg", "data": data }
-                    self.log("Sending message '%s'" % msg)
+                    msg = {"type": "msg", "data": data}
+                    log("Sending message '%s'" % msg)
                     self.send(msg)
                     self.waiting = True
 
-        return
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='send data')
