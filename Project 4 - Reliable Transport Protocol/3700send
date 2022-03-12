@@ -2,10 +2,10 @@
 
 import argparse, socket, time, json, select, struct, sys, math
 from typing import Dict
-from window import Window
+from window import MemoryBuffer
 
 DATA_SIZE = 1375
-MAX_WINDOW_SIZE = 4
+MAX_WINDOW_SIZE = 2
 
 
 def log(message):
@@ -21,7 +21,8 @@ class Sender:
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.socket.bind(('0.0.0.0', 0))
         self.waiting = False
-        self.window = Window(MAX_WINDOW_SIZE)
+        self.tcp_buffer = MemoryBuffer(MAX_WINDOW_SIZE)
+        self.all_data_sent = False
 
     def send(self, message):
         self.socket.sendto(json.dumps(message).encode('utf-8'), (self.host, self.remote_port))
@@ -29,25 +30,47 @@ class Sender:
     def run(self):
         while True:
             sockets = [self.socket, sys.stdin] if not self.waiting else [self.socket]
-
             socks = select.select(sockets, [], [], 0.1)[0]
             for conn in socks:
                 if conn == self.socket:
                     k, addr = conn.recvfrom(65535)
-                    msg = k.decode('utf-8')
-
+                    try:
+                        msg = json.loads(k.decode('utf-8'))
+                    except ValueError:
+                        log("Invalid json received")
+                        continue
                     log("Received message '%s'" % msg)
+                    self.tcp_buffer.set_ack_no(msg["header"]["sno"])
                     self.waiting = False
+                    self.send_data()
+
+                    if self.all_data_sent:
+                        self.try_to_exit()
                 elif conn == sys.stdin:
                     data = sys.stdin.read(DATA_SIZE)
                     if len(data) == 0:
-                        log("All done!")
-                        sys.exit(0)
-                    msg = {"type": "msg", "data": data}
-                    log("Sending message '%s'" % msg)
-                    self.send(msg)
-                    self.waiting = True
+                        self.all_data_sent = True
+                        self.try_to_exit()
+                        continue
+                    self.send_data(data)
 
+    def try_to_exit(self):
+        if self.tcp_buffer.all_data_acked():
+            log("All done!")
+            sys.exit(0)
+
+    def send_data(self, data: str = "") -> None:
+        if data:
+            self.tcp_buffer.add_data(data)
+        data_to_send = self.tcp_buffer.get_data_to_send()
+        if not data_to_send:
+            self.waiting = True
+            return
+
+        for seq_no, data in data_to_send:
+            msg = {"header": {"sno": seq_no}, "body": {"type": "msg", "data": data}}
+            log("Sending message '%s'" % msg)
+            self.send(msg)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='send data')

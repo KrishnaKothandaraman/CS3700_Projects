@@ -31,17 +31,18 @@ class Receiver:
                 if self.remote_host is None:
                     self.remote_host = addr[0]
                     self.remote_port = addr[1]
-
-                msg = json.loads(data.decode('utf-8'))
+                try:
+                    msg = json.loads(data.decode('utf-8'))
+                except ValueError:
+                    log("Broken json")
+                    sys.exit(1)
                 log("Received data message %s" % msg)
 
                 # Print out the data to stdout
-                print(msg["data"], end='', flush=True)
+                print(msg["body"]["data"], end='', flush=True)
 
                 # Always send back an ack
-                self.send({"type": "ack"})
-
-        return
+                self.send({"header": {"sno": msg["header"]["sno"]}, "body": {"type": "ack"}})
 
 
 if __name__ == "__main__":
