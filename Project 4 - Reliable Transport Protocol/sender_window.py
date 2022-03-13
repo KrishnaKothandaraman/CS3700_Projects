@@ -1,5 +1,6 @@
 from typing import Dict, List, Tuple
 
+Packet = Tuple[int, str]
 
 class SenderWindow:
     """Class that mimics a memory buffer in C for TCP"""
@@ -19,7 +20,7 @@ class SenderWindow:
         """Appends data to buffer"""
         self.buffer.append(data)
 
-    def get_data_to_send(self) -> List[Tuple[int, str]]:
+    def get_data_to_send(self) -> List[Packet]:
         """Gets all data that can be sent after taking into consideration packets that have been sent but are un
         acknowledged """
         if (self.last_sent + 1) > len(self.buffer) or (self.last_sent - self.last_ack) >= self.max_buffer_size:
@@ -45,13 +46,18 @@ class SenderWindow:
     def all_data_acked(self) -> bool:
         return self.last_sent == self.last_ack
 
+    def get_data_by_sno(self, sno) -> str:
+        for i, data in enumerate(self.buffer):
+            if i == sno:
+                return data
+        return ""
+
 
 if __name__ == "__main__":
     buf = SenderWindow(2)
     buf.add_data("0")
-    print(buf.get_data_to_send())
     buf.add_data("1")
-    print(buf.get_data_to_send())
+    print(buf.get_data_by_sno(1))
     buf.add_data("2")
     print(buf.get_data_to_send())
     buf.add_data("3")

@@ -1,11 +1,12 @@
 #!/usr/bin/env -S python3 -u
 
 import argparse, socket, time, json, select, struct, sys, math
-from typing import Dict
+import datetime
+from typing import Dict, List, Any, Tuple
 from sender_window import SenderWindow
 
 DATA_SIZE = 1375
-MAX_WINDOW_SIZE = 4
+MAX_WINDOW_SIZE = 3
 
 
 def log(message):
@@ -15,6 +16,7 @@ def log(message):
 
 class Sender:
     tcp_buffer: SenderWindow
+    packetTimer: Dict[int, datetime.datetime]
 
     def __init__(self, host, port):
         self.host = host
@@ -25,9 +27,17 @@ class Sender:
         self.waiting = False
         self.tcp_buffer = SenderWindow(MAX_WINDOW_SIZE)
         self.all_data_sent = False
+        self.packetTimer = {}
 
     def send(self, message):
         self.socket.sendto(json.dumps(message).encode('utf-8'), (self.host, self.remote_port))
+
+    def cleanPacketTimer(self, sno: int) -> None:
+        """Tries to delete acked packet"""
+        if sno not in self.packetTimer:
+            return
+
+        del self.packetTimer[sno]
 
     def run(self):
         while True:
@@ -35,14 +45,19 @@ class Sender:
             socks = select.select(sockets, [], [], 0.1)[0]
             for conn in socks:
                 if conn == self.socket:
-                    k, addr = conn.recvfrom(65535)
+                    k, _ = conn.recvfrom(65535)
                     try:
                         msg = json.loads(k.decode('utf-8'))
                     except ValueError:
                         log("Invalid json received")
                         continue
                     log("Received message '%s'" % msg)
-                    self.tcp_buffer.set_ack_no(msg["header"]["sno"])
+
+                    received_sno = msg["header"]["sno"]
+
+                    self.cleanPacketTimer(received_sno)
+                    self.tcp_buffer.set_ack_no(received_sno)
+
                     self.waiting = False
                     self.send_data()
 
@@ -55,6 +70,20 @@ class Sender:
                         self.try_to_exit()
                         continue
                     self.send_data(data)
+                self.sendExpiredData()
+
+    def expired(self, time: datetime.datetime) -> bool:
+        return (datetime.datetime.now() - time).total_seconds() > 1
+
+    def sendExpiredData(self) -> None:
+
+        for sno, sentTime in self.packetTimer.items():
+            if self.expired(sentTime):
+                data = self.tcp_buffer.get_data_by_sno(sno)
+                self.send(self.construct_json(sno, data))
+
+    def construct_json(self, sno, data) -> Dict:
+        return {"header": {"sno": sno}, "body": {"type": "msg", "data": data}}
 
     def try_to_exit(self):
         if self.tcp_buffer.all_data_acked():
@@ -70,6 +99,7 @@ class Sender:
             return
 
         for seq_no, data in data_to_send:
+            self.packetTimer[seq_no] = datetime.datetime.now()
             msg = {"header": {"sno": seq_no}, "body": {"type": "msg", "data": data}}
             log("Sending message '%s'" % msg)
             self.send(msg)

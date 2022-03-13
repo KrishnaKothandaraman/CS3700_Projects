@@ -53,14 +53,15 @@ class Receiver:
                         continue
                     else:
                         self.tcp_buffer.add(received_seq_no, received_data)
+                        self.send({"header": {"sno": msg["header"]["sno"]}, "body": {"type": "ack"}})
+
                 else:
+                    self.send({"header": {"sno": msg["header"]["sno"]}, "body": {"type": "ack"}})
                     # TODO: This can be made async potentially
                     self.tcp_buffer.add(received_seq_no, received_data)
                     printable_data = self.tcp_buffer.flush()
                     self.print_data(printable_data)
 
-                    # Always send back an ack
-                    self.send({"header": {"sno": msg["header"]["sno"]}, "body": {"type": "ack"}})
 
     # TODO: This can be made async too
     def print_data(self, packet: List[Tuple[int,str]]) -> None:
