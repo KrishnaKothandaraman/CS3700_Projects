@@ -1,6 +1,8 @@
 #!/usr/bin/env -S python3 -u
 
 import argparse, socket, time, json, select, struct, sys, math
+from receiver_window import ReceiverWindow
+from typing import List, Tuple
 
 
 def log(message):
@@ -9,11 +11,14 @@ def log(message):
 
 
 class Receiver:
+    tcp_buffer: ReceiverWindow
+
     def __init__(self):
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.socket.bind(('0.0.0.0', 0))
         self.port = self.socket.getsockname()[1]
         self.next_expected_packet = 0
+        self.tcp_buffer = ReceiverWindow()
         log("Bound to port %d" % self.port)
 
         self.remote_host = None
@@ -41,16 +46,28 @@ class Receiver:
 
                 # Print out the data to stdout
                 received_seq_no = msg["header"]["sno"]
+                received_data = msg["body"]["data"]
 
                 if received_seq_no != self.next_expected_packet:
-                    continue
-
+                    if self.tcp_buffer.already_buffered(received_seq_no):
+                        continue
+                    else:
+                        self.tcp_buffer.add(received_seq_no, received_data)
                 else:
-                    print(msg["body"]["data"], end='', flush=True)
+                    # TODO: This can be made async potentially
+                    self.tcp_buffer.add(received_seq_no, received_data)
+                    printable_data = self.tcp_buffer.flush()
+                    self.print_data(printable_data)
 
                     # Always send back an ack
                     self.send({"header": {"sno": msg["header"]["sno"]}, "body": {"type": "ack"}})
-                    self.next_expected_packet += 1
+
+    # TODO: This can be made async too
+    def print_data(self, packet: List[Tuple[int,str]]) -> None:
+        for _, data in packet:
+            print(data, end="")
+        self.next_expected_packet = packet[len(packet) - 1][0] + 1
+
 
 
 if __name__ == "__main__":

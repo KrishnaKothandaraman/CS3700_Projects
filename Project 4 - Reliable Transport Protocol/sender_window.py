@@ -1,7 +1,7 @@
 from typing import Dict, List, Tuple
 
 
-class MemoryBuffer:
+class SenderWindow:
     """Class that mimics a memory buffer in C for TCP"""
     buffer: List[str]
     last_sent: int
@@ -47,7 +47,7 @@ class MemoryBuffer:
 
 
 if __name__ == "__main__":
-    buf = MemoryBuffer(2)
+    buf = SenderWindow(2)
     buf.add_data("0")
     print(buf.get_data_to_send())
     buf.add_data("1")
