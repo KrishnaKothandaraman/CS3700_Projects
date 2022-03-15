@@ -1,6 +1,13 @@
 from typing import Dict, List, Tuple
+import sys
 
 Packet = Tuple[int, str]
+
+
+def log(message):
+    sys.stderr.write(message + "\n")
+    sys.stderr.flush()
+
 
 class SenderWindow:
     """Class that mimics a memory buffer in C for TCP"""
@@ -15,6 +22,7 @@ class SenderWindow:
         # normalize because last_sent starts at 0
         self.max_buffer_size = max_buff
         self.last_ack = -1
+        self.sack = []
 
     def add_data(self, data: str) -> None:
         """Appends data to buffer"""
@@ -23,22 +31,56 @@ class SenderWindow:
     def get_data_to_send(self) -> List[Packet]:
         """Gets all data that can be sent after taking into consideration packets that have been sent but are un
         acknowledged """
+
+        # all data in buffer sent or network full
         if (self.last_sent + 1) > len(self.buffer) or (self.last_sent - self.last_ack) >= self.max_buffer_size:
             return []
 
-        last_transmissible_idx = min(self.last_sent + (self.max_buffer_size - (self.last_sent - self.last_ack)) + 1
+        last_sliding_window_index = 0
+        starting_index = 0
+        if self.sack:
+            last_sliding_window_index = self.sack[-1]
+            starting_index = self.last_ack
+
+        else:
+            last_sliding_window_index = self.last_sent + (self.max_buffer_size - (self.last_sent - self.last_ack))
+            starting_index = self.last_sent
+
+        # minimum of last index in buffer or last index in the sliding window
+        last_transmissible_idx = min(last_sliding_window_index + 1
                                      , len(self.buffer))
 
         data_list = []
-        for i in range(self.last_sent + 1, last_transmissible_idx):
-            self.last_sent += 1
-            data_list.append((self.last_sent, self.buffer[i]))
+        log("-------------------------------------")
+        log(f"Buffer {self.buffer}")
+        log(f"Sack: {self.sack}")
+        log(f"Starting idx {starting_index + 1}")
+        log(f"Ending idx {last_transmissible_idx}")
+        log("-------------------------------------")
+
+        for i in range(starting_index + 1, last_transmissible_idx):
+            if i not in self.sack:
+                self.last_sent = max(self.last_sent, i)
+                data_list.append((self.last_sent, self.buffer[i]))
 
         return data_list
 
-    def set_ack_no(self, ack_no: int) -> None:
-        """Sets ack number"""
-        self.last_ack = max(self.last_ack, ack_no)
+    def check_expected_ack_and_set(self, ack_no: int, sack: List[int]) -> None:
+        """
+        Checks if ack_no is expected. If expected, updates next expected ack. Otherwise, resets last sent index
+        :param sack: Received sack
+        :param ack_no: ack received
+        """
+        # TODO: Rethink last_ack logic because ack_no means everything until that packed has been received in order.
+        # TODO: Question is how to infer from that, whether I need to retransmit a packet or not
+        if ack_no == self.last_ack + 1:
+            self.last_ack = ack_no
+            self.sack = sack
+        else:
+            if sack:
+                print(f"Resetting last ack to {self.last_ack}", flush=True)
+                self.last_sent = self.last_ack
+                self.sack = sack
 
     def get_seq_no(self) -> int:
         return self.last_sent
@@ -52,13 +94,18 @@ class SenderWindow:
                 return data
         return ""
 
+    def reset_ack(self):
+        self.last_sent = self.last_ack
+
 
 if __name__ == "__main__":
-    buf = SenderWindow(2)
-    buf.add_data("0")
-    buf.add_data("1")
-    print(buf.get_data_by_sno(1))
-    buf.add_data("2")
+    buf = SenderWindow(3)
+    buf.add_data("a")
+    buf.add_data("b")
+    buf.add_data("c")
     print(buf.get_data_to_send())
-    buf.add_data("3")
+    buf.check_expected_ack_and_set(0, [])
+    buf.check_expected_ack_and_set(0, [2])
+    print(buf.get_data_to_send())
+    buf.check_expected_ack_and_set(2, [])
     print(buf.get_data_to_send())

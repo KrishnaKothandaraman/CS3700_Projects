@@ -1,4 +1,10 @@
+import sys
 from typing import Dict, List, Tuple, Set
+
+
+def log(message):
+    sys.stderr.write(message + "\n")
+    sys.stderr.flush()
 
 
 class ReceiverWindow:
@@ -24,26 +30,41 @@ class ReceiverWindow:
 
         self.bufferedSequenceNos.add(seq_no)
 
-    def flush(self) -> List[Tuple[int,str]]:
+    def flush(self, expectedSeqNo: int) -> Tuple[int, List[Tuple[int, str]]]:
         """Returns data from buffer that are valid"""
         return_list = []
 
         if not self.buffer:
-            return []
+            return -1, []
+        # log(f"Current buffer: {self.buffer}")
 
-        expectedSeqNo = self.buffer[0][0]
         for seq, data in self.buffer:
             if seq == expectedSeqNo:
                 return_list.append((seq, data))
                 expectedSeqNo += 1
             else:
                 break
+        # log(f"New buffer: {self.buffer}")
+
         self.buffer = self.buffer[len(return_list):]
-        return return_list
+
+        if return_list:
+            last_ordered_ack = return_list[-1][0]
+
+        else:
+            last_ordered_ack = expectedSeqNo
+        return last_ordered_ack, return_list
 
     def already_buffered(self, seq_no: int) -> bool:
         """Returns True if seq_no is already in buffer. False otherwise"""
         return seq_no in self.bufferedSequenceNos
+
+    def get_sack(self) -> List[int]:
+        sack_list = []
+        for seq_no, _ in self.buffer:
+            sack_list.append(seq_no)
+
+        return sack_list
 
 
 if __name__ == "__main__":

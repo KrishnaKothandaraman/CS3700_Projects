@@ -6,12 +6,20 @@ from typing import Dict, List, Any, Tuple
 from sender_window import SenderWindow
 
 DATA_SIZE = 1375
-MAX_WINDOW_SIZE = 3
+MAX_WINDOW_SIZE = 4
 
 
 def log(message):
     sys.stderr.write(message + "\n")
     sys.stderr.flush()
+
+
+def expired(time: datetime.datetime) -> bool:
+    return (datetime.datetime.now() - time).total_seconds() > 1
+
+
+def construct_json(sno, data) -> Dict:
+    return {"header": {"sno": sno}, "body": {"type": "msg", "data": data}}
 
 
 class Sender:
@@ -54,9 +62,10 @@ class Sender:
                     log("Received message '%s'" % msg)
 
                     received_sno = msg["header"]["sno"]
+                    received_sack = msg["header"]["sack"]
 
                     self.cleanPacketTimer(received_sno)
-                    self.tcp_buffer.set_ack_no(received_sno)
+                    self.tcp_buffer.check_expected_ack_and_set(received_sno, received_sack)
 
                     self.waiting = False
                     self.send_data()
@@ -64,35 +73,37 @@ class Sender:
                     if self.all_data_sent:
                         self.try_to_exit()
                 elif conn == sys.stdin:
+
                     data = sys.stdin.read(DATA_SIZE)
+
                     if len(data) == 0:
                         self.all_data_sent = True
                         self.try_to_exit()
                         continue
-                    self.send_data(data)
-                self.sendExpiredData()
 
-    def expired(self, time: datetime.datetime) -> bool:
-        return (datetime.datetime.now() - time).total_seconds() > 1
+                    self.tcp_buffer.add_data(data)
+                    self.send_data()
+
+                # self.sendExpiredData()
 
     def sendExpiredData(self) -> None:
 
         for sno, sentTime in self.packetTimer.items():
-            if self.expired(sentTime):
+            if expired(sentTime):
                 data = self.tcp_buffer.get_data_by_sno(sno)
-                self.send(self.construct_json(sno, data))
-
-    def construct_json(self, sno, data) -> Dict:
-        return {"header": {"sno": sno}, "body": {"type": "msg", "data": data}}
+                self.send(construct_json(sno, data))
 
     def try_to_exit(self):
         if self.tcp_buffer.all_data_acked():
             log("All done!")
             sys.exit(0)
 
-    def send_data(self, data: str = "") -> None:
-        if data:
-            self.tcp_buffer.add_data(data)
+    def send_data(self) -> None:
+        """
+        Send data to receiver
+        :return: None
+        """
+
         data_to_send = self.tcp_buffer.get_data_to_send()
         if not data_to_send:
             self.waiting = True
