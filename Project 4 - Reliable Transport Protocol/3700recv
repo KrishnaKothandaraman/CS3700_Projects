@@ -25,6 +25,7 @@ class Receiver:
         self.remote_port = None
 
     def send(self, message):
+        log(f"Sending ack {message}")
         self.socket.sendto(json.dumps(message).encode('utf-8'), (self.remote_host, self.remote_port))
 
     def run(self):
@@ -49,25 +50,39 @@ class Receiver:
                 received_data = msg["body"]["data"]
 
                 if received_seq_no != self.next_expected_packet:
-                    if self.tcp_buffer.already_buffered(received_seq_no):
-                        continue
-                    else:
+                    if not self.tcp_buffer.already_buffered(received_seq_no):
                         self.tcp_buffer.add(received_seq_no, received_data)
+                        # flush before getting sack to ensure ordered packets aren't returned as sack
+                        self.tcp_buffer.flush(self.next_expected_packet)
+
+                        self.send({"header": {
+                                        "sno": self.next_expected_packet - 1,
+                                        "sack": self.tcp_buffer.get_sack()
+                                        },
+                                   "body": {
+                                       "type": "ack"
+                                        }
+                                   })
                 else:
-                    # TODO: This can be made async potentially
+                    # flush before getting sack to ensure ordered packets aren't returned as sack
                     self.tcp_buffer.add(received_seq_no, received_data)
-                    printable_data = self.tcp_buffer.flush()
+                    last_ordered_packet, printable_data = self.tcp_buffer.flush(self.next_expected_packet)
+                    self.send({"header": {
+                            "sno": last_ordered_packet,
+                            "sack": self.tcp_buffer.get_sack()
+                        },
+                            "body": {
+                                "type": "ack"
+                            }
+                        })
+                    # TODO: This can be made async potentially
                     self.print_data(printable_data)
 
-                    # Always send back an ack
-                    self.send({"header": {"sno": msg["header"]["sno"]}, "body": {"type": "ack"}})
-
     # TODO: This can be made async too
-    def print_data(self, packet: List[Tuple[int,str]]) -> None:
+    def print_data(self, packet: List[Tuple[int, str]]) -> None:
         for _, data in packet:
             print(data, end="")
         self.next_expected_packet = packet[len(packet) - 1][0] + 1
-
 
 
 if __name__ == "__main__":
