@@ -48,26 +48,19 @@ class Receiver:
                 received_seq_no = msg["header"]["sno"]
                 received_data = msg["body"]["data"]
 
-                if received_seq_no != self.next_expected_packet:
-                    if self.tcp_buffer.already_buffered(received_seq_no):
-                        continue
-                    else:
-                        self.tcp_buffer.add(received_seq_no, received_data)
-                else:
-                    # TODO: This can be made async potentially
-                    self.tcp_buffer.add(received_seq_no, received_data)
-                    printable_data = self.tcp_buffer.flush()
-                    self.print_data(printable_data)
+                # TODO: This can be made async potentially
+                self.tcp_buffer.add(received_seq_no, received_data)
+                printable_data = self.tcp_buffer.flush()
+                self.print_data(printable_data)
 
-                    # Always send back an ack
-                    self.send({"header": {"sno": msg["header"]["sno"]}, "body": {"type": "ack"}})
+                # Always send back an ack
+                self.send({"header": {"sno": received_seq_no}, "body": {"type": "ack"}})
 
     # TODO: This can be made async too
-    def print_data(self, packet: List[Tuple[int,str]]) -> None:
+    def print_data(self, packet: List[Tuple[int, str]]) -> None:
         for _, data in packet:
             print(data, end="")
         self.next_expected_packet = packet[len(packet) - 1][0] + 1
-
 
 
 if __name__ == "__main__":
