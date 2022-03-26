@@ -49,6 +49,9 @@ class Receiver:
                 received_seq_no = msg["header"]["sno"]
                 received_data = msg["body"]["data"]
 
+                # sack skeleton has been added. Can be used later on but will rely on RTT estimation to handle packet
+                # losses for now.
+
                 if received_seq_no == self.next_expected_packet:
                     self.send({"header": {"sno": received_seq_no, "sack": []}, "body": {"type": "ack"}})
                     self.tcp_buffer.add(received_seq_no, received_data)
