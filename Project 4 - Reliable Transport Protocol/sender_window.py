@@ -97,10 +97,12 @@ class SenderWindow:
 
     def additive_increase(self):
         """Increases window by 1"""
+        self.max_buffer_size += 1
         log(f"Increasing window {self.max_buffer_size}")
 
     def multiplicative_decrease(self):
         """Decreases window by half"""
+        self.max_buffer_size = self.max_buffer_size // 2 + 1
         log(f"Decreasing window: {self.max_buffer_size}")
 
 
