@@ -89,6 +89,14 @@ class SenderWindow:
         """Returns number of packets that can be sent without filling the network"""
         return self.max_buffer_size - self.packets_in_network
 
+    def additive_increase(self):
+        """Increases window by 1"""
+        self.max_buffer_size += 1
+
+    def multiplicative_decrease(self):
+        """Decreases window by half"""
+        self.max_buffer_size /= 2
+
 
 if __name__ == "__main__":
     buf = SenderWindow(3)

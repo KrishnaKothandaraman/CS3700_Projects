@@ -1,13 +1,16 @@
 #!/usr/bin/env -S python3 -u
 
-import argparse, socket, time, json, select, struct, sys, math
+import argparse, socket, json, select, sys
 import datetime
-from typing import Dict, Tuple
+from typing import Dict, Tuple, Set
 from sender_window import SenderWindow
 import hashlib
 
+Packet_Timer = Tuple[datetime.datetime, float]
+
 DATA_SIZE = 1375
 MAX_WINDOW_SIZE = 4
+TCP_TIMEOUT_ALPHA = 0.875
 
 
 def log(message):
@@ -16,17 +19,20 @@ def log(message):
 
 
 def create_message(seq_no: int, data: str) -> dict:
-    checksum = hashlib.md5((str(seq_no)+data).encode('utf-8')).hexdigest()
+    checksum = hashlib.md5((str(seq_no) + data).encode('utf-8')).hexdigest()
     return {"header": {"sno": seq_no}, "body": {"type": "msg", "data": data}, "checksum": checksum}
 
 
-def is_expired(sent_time: datetime.datetime) -> bool:
-    return (datetime.datetime.now() - sent_time).total_seconds() > 2
+def is_expired(sent_time: datetime.datetime, expiry_time) -> bool:
+    return (datetime.datetime.now() - sent_time).total_seconds() > expiry_time
 
 
 class Sender:
     tcp_buffer: SenderWindow
-    packetTimer: Dict[int, datetime.datetime]
+    packetTimer: Dict[int, Packet_Timer]
+    RTT: float
+    waiting: bool
+    retransmitted_packets: Set[int]
 
     def __init__(self, host, port):
         self.host = host
@@ -38,6 +44,8 @@ class Sender:
         self.tcp_buffer = SenderWindow(MAX_WINDOW_SIZE)
         self.packetTimer = {}
         self.all_data_sent = False
+        self.RTT = 1
+        self.retransmitted_packets = set()
 
     def send(self, message, seq_no: int) -> None:
         """
@@ -45,7 +53,7 @@ class Sender:
         :param seq_no: Seq_no of packet
         :param message: Message to be sent
         """
-        self.packetTimer[seq_no] = datetime.datetime.now()
+        self.packetTimer[seq_no] = (datetime.datetime.now(), 2 * self.RTT)
         log("Sending message '%s'" % message)
         self.socket.sendto(json.dumps(message).encode('utf-8'), (self.host, self.remote_port))
 
@@ -72,6 +80,10 @@ class Sender:
                     self.tcp_buffer.set_ack_no(received_seq_no)
 
                     if received_seq_no in self.packetTimer:
+
+                        if received_seq_no not in self.retransmitted_packets:
+                            self.resample_RTT(self.packetTimer[received_seq_no][0])
+
                         del self.packetTimer[received_seq_no]
 
                     self.waiting = False
@@ -92,6 +104,12 @@ class Sender:
                     self.send_expired_data()
                     self.send_new_data(data)
 
+    def resample_RTT(self, sent_time: datetime.datetime) -> None:
+        log(f"Resampling RTT")
+        packetRTT = (datetime.datetime.now() - sent_time).total_seconds()
+
+        self.RTT = TCP_TIMEOUT_ALPHA * self.RTT + (1 - TCP_TIMEOUT_ALPHA) * packetRTT
+
     def try_to_exit(self):
         if self.tcp_buffer.all_data_acked():
             log("All done!")
@@ -99,14 +117,14 @@ class Sender:
 
     def send_expired_data(self):
         for seq_no in self.packetTimer:
-            if not is_expired(self.packetTimer[seq_no]):
+            if not is_expired(*self.packetTimer[seq_no]):
                 continue
-            log(f"Expired {seq_no}")
             data = self.tcp_buffer.get_data_from_seq_no(seq_no)
             if data == "":
                 continue
             log(f"Retransmitting {seq_no}")
             msg = create_message(seq_no, data)
+            self.retransmitted_packets.add(seq_no)
             self.send(msg, seq_no)
 
     def send_new_data(self, data: str = "") -> None:
