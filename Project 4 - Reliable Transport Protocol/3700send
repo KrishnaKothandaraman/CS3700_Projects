@@ -14,6 +14,10 @@ def log(message):
     sys.stderr.flush()
 
 
+def is_expired(sent_time: datetime.datetime) -> bool:
+    return (datetime.datetime.now() - sent_time).total_seconds() > 2
+
+
 class Sender:
     tcp_buffer: SenderWindow
     packetTimer: Dict[int, datetime.datetime]
@@ -29,17 +33,25 @@ class Sender:
         self.packetTimer = {}
         self.all_data_sent = False
 
-    def send(self, message) -> None:
+    def send(self, message, seq_no: int) -> None:
         """
-        Method to send a packet to self.host and self.remote_port
+        Method to send a packet to self.host and self.remote_port and records send time of seq_no
+        :param seq_no: Seq_no of packet
         :param message: Message to be sent
         """
+        self.packetTimer[seq_no] = datetime.datetime.now()
+        log("Sending message '%s'" % message)
         self.socket.sendto(json.dumps(message).encode('utf-8'), (self.host, self.remote_port))
 
     def run(self):
         while True:
             sockets = [self.socket, sys.stdin] if not self.waiting else [self.socket]
             socks = select.select(sockets, [], [], 0.1)[0]
+
+            if not socks:
+                self.send_expired_data()
+                continue
+
             for conn in socks:
                 if conn == self.socket:
                     k, addr = conn.recvfrom(65535)
@@ -57,7 +69,8 @@ class Sender:
                         del self.packetTimer[received_seq_no]
 
                     self.waiting = False
-                    self.send_data()
+                    self.send_expired_data()
+                    self.send_new_data()
 
                     if self.all_data_sent:
                         self.try_to_exit()
@@ -69,14 +82,28 @@ class Sender:
                         self.all_data_sent = True
                         self.try_to_exit()
                         continue
-                    self.send_data(data)
+
+                    self.send_expired_data()
+                    self.send_new_data(data)
 
     def try_to_exit(self):
         if self.tcp_buffer.all_data_acked():
             log("All done!")
             sys.exit(0)
 
-    def send_data(self, data: str = "") -> None:
+    def send_expired_data(self):
+        for seq_no in self.packetTimer:
+            if not is_expired(self.packetTimer[seq_no]):
+                continue
+            log(f"Expired {seq_no}")
+            data = self.tcp_buffer.get_data_from_seq_no(seq_no)
+            if data == "":
+                continue
+            msg = {"header": {"sno": seq_no}, "body": {"type": "msg", "data": data}}
+            log(f"Retransmitting {seq_no}")
+            self.send(msg, seq_no)
+
+    def send_new_data(self, data: str = "") -> None:
         if data:
             self.tcp_buffer.add_data(data)
         data_to_send = self.tcp_buffer.get_data_to_send()
@@ -86,9 +113,7 @@ class Sender:
 
         for seq_no, data in data_to_send:
             msg = {"header": {"sno": seq_no}, "body": {"type": "msg", "data": data}}
-            log("Sending message '%s'" % msg)
-            self.packetTimer[seq_no] = datetime.datetime.now()
-            self.send(msg)
+            self.send(msg, seq_no)
 
 
 if __name__ == "__main__":
