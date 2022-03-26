@@ -61,7 +61,9 @@ class Sender:
 
                     if self.all_data_sent:
                         self.try_to_exit()
+
                 elif conn == sys.stdin:
+
                     data = sys.stdin.read(DATA_SIZE)
                     if len(data) == 0:
                         self.all_data_sent = True

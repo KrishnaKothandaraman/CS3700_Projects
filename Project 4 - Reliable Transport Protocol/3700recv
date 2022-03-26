@@ -12,6 +12,7 @@ def log(message):
 
 class Receiver:
     tcp_buffer: ReceiverWindow
+    next_expected_packet: int
 
     def __init__(self):
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -48,16 +49,24 @@ class Receiver:
                 received_seq_no = msg["header"]["sno"]
                 received_data = msg["body"]["data"]
 
-                # TODO: This can be made async potentially
-                self.tcp_buffer.add(received_seq_no, received_data)
-                printable_data = self.tcp_buffer.flush()
-                self.print_data(printable_data)
+                if received_seq_no == self.next_expected_packet:
+                    self.send({"header": {"sno": received_seq_no, "sack": []}, "body": {"type": "ack"}})
+                    self.tcp_buffer.add(received_seq_no, received_data)
 
-                # Always send back an ack
-                self.send({"header": {"sno": received_seq_no}, "body": {"type": "ack"}})
+                    self.next_expected_packet += 1
+                    self.print_data(self.tcp_buffer.flush())
+
+                else:
+                    if not self.tcp_buffer.already_buffered(received_seq_no):
+                        self.tcp_buffer.add(received_seq_no, received_data)
+                        self.send({"header": {"sno": received_seq_no, "sack": self.tcp_buffer.get_buffer_seq_nos()},
+                                   "body": {"type": "ack"}})
 
     # TODO: This can be made async too
     def print_data(self, packet: List[Tuple[int, str]]) -> None:
+        if not packet:
+            return
+
         for _, data in packet:
             print(data, end="")
         self.next_expected_packet = packet[len(packet) - 1][0] + 1
