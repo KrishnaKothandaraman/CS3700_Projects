@@ -1,6 +1,12 @@
 from typing import Dict, List, Tuple
+import sys
 
 Packet = Tuple[int, str]
+
+
+def log(message):
+    sys.stderr.write(message + "\n")
+    sys.stderr.flush()
 
 
 class SenderWindow:
@@ -91,14 +97,12 @@ class SenderWindow:
 
     def additive_increase(self):
         """Increases window by 1"""
-        self.max_buffer_size += 1
+        log(f"Increasing window {self.max_buffer_size}")
 
     def multiplicative_decrease(self):
         """Decreases window by half"""
-        self.max_buffer_size /= 2
+        log(f"Decreasing window: {self.max_buffer_size}")
 
 
 if __name__ == "__main__":
     buf = SenderWindow(3)
-
-

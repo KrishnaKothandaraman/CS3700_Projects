@@ -9,7 +9,7 @@ import hashlib
 Packet_Timer = Tuple[datetime.datetime, float]
 
 DATA_SIZE = 1375
-MAX_WINDOW_SIZE = 4
+MAX_WINDOW_SIZE = 5
 TCP_TIMEOUT_ALPHA = 0.875
 
 
@@ -86,6 +86,7 @@ class Sender:
 
                         del self.packetTimer[received_seq_no]
 
+                    self.tcp_buffer.additive_increase()
                     self.waiting = False
                     self.send_expired_data()
                     self.send_new_data()
@@ -105,7 +106,6 @@ class Sender:
                     self.send_new_data(data)
 
     def resample_RTT(self, sent_time: datetime.datetime) -> None:
-        log(f"Resampling RTT")
         packetRTT = (datetime.datetime.now() - sent_time).total_seconds()
 
         self.RTT = TCP_TIMEOUT_ALPHA * self.RTT + (1 - TCP_TIMEOUT_ALPHA) * packetRTT
@@ -117,21 +117,26 @@ class Sender:
 
     def send_expired_data(self):
         for seq_no in self.packetTimer:
+
             if not is_expired(*self.packetTimer[seq_no]):
                 continue
+
             data = self.tcp_buffer.get_data_from_seq_no(seq_no)
+
             if data == "":
                 continue
+
             log(f"Retransmitting {seq_no}")
             msg = create_message(seq_no, data)
             self.retransmitted_packets.add(seq_no)
             self.send(msg, seq_no)
+            self.tcp_buffer.multiplicative_decrease()
 
     def send_new_data(self, data: str = "") -> None:
         if data:
             self.tcp_buffer.add_data(data)
         data_to_send = self.tcp_buffer.get_data_to_send()
-        if not data_to_send:
+        if not data_to_send and not self.tcp_buffer.all_data_acked():
             self.waiting = True
             return
 
