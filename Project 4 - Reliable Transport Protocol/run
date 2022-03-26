@@ -99,7 +99,7 @@ class Wrapper:
   def bytes_sent(self, length):
     self.packets += 1
     self.bytes += length
-    
+
   def is_started(self):
     return self.process is not None
 
@@ -149,7 +149,7 @@ class Wrapper:
       data, addr = fd.fd.recvfrom(65535)
       if not self.remote_port:
         self.remote_port = addr[1]
-      
+
       simulator.packet_received(self, data)
     else:
       data = fd.fd.read(100000)
@@ -159,7 +159,7 @@ class Wrapper:
 
       if self.process.returncode is not None or len(data) == 0:
         die("%s crashed; exiting" % self.executable)
-        
+
       if self.executable != RECEVIER_EXECUTABLE_NAME or fd.fd != self.process.stdout:
         for line in data.decode('utf-8').strip().split("\n"):
           log(self.executable, (" " * 50 if self.executable == "3700recv" else "" ) + line)
@@ -192,7 +192,7 @@ class Sender(Wrapper):
         pass
 
     self.thread = Thread(target=go)
-    self.thread.start() 
+    self.thread.start()
 
   def stop(self):
     super().stop()
@@ -398,7 +398,7 @@ class Simulator:
       log("Simulator", "Mangling packet sent by %s" % endpoint)
       tmp = bytearray(data)
       for i in range(0, 5):
-        tmp[random.randint(0, len(tmp))] = 0x58
+        tmp[random.randint(0, len(tmp)-1)] = 0x58
       data = bytes(tmp)
 
     if duplicate():

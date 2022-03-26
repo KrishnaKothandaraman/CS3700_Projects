@@ -4,6 +4,7 @@ import argparse, socket, time, json, select, struct, sys, math
 import datetime
 from typing import Dict, Tuple
 from sender_window import SenderWindow
+import hashlib
 
 DATA_SIZE = 1375
 MAX_WINDOW_SIZE = 4
@@ -12,6 +13,11 @@ MAX_WINDOW_SIZE = 4
 def log(message):
     sys.stderr.write(message + "\n")
     sys.stderr.flush()
+
+
+def create_message(seq_no: int, data: str) -> dict:
+    checksum = hashlib.md5((str(seq_no)+data).encode('utf-8')).hexdigest()
+    return {"header": {"sno": seq_no}, "body": {"type": "msg", "data": data}, "checksum": checksum}
 
 
 def is_expired(sent_time: datetime.datetime) -> bool:
@@ -57,12 +63,12 @@ class Sender:
                     k, addr = conn.recvfrom(65535)
                     try:
                         msg = json.loads(k.decode('utf-8'))
-                    except ValueError:
-                        log("Invalid json received")
+                        received_seq_no = msg["header"]["sno"]
+                    except (KeyError, ValueError):
+                        log("Dropping broken json")
                         continue
                     log("Received message '%s'" % msg)
 
-                    received_seq_no = msg["header"]["sno"]
                     self.tcp_buffer.set_ack_no(received_seq_no)
 
                     if received_seq_no in self.packetTimer:
@@ -99,8 +105,8 @@ class Sender:
             data = self.tcp_buffer.get_data_from_seq_no(seq_no)
             if data == "":
                 continue
-            msg = {"header": {"sno": seq_no}, "body": {"type": "msg", "data": data}}
             log(f"Retransmitting {seq_no}")
+            msg = create_message(seq_no, data)
             self.send(msg, seq_no)
 
     def send_new_data(self, data: str = "") -> None:
@@ -112,7 +118,7 @@ class Sender:
             return
 
         for seq_no, data in data_to_send:
-            msg = {"header": {"sno": seq_no}, "body": {"type": "msg", "data": data}}
+            msg = create_message(seq_no, data)
             self.send(msg, seq_no)
 
 

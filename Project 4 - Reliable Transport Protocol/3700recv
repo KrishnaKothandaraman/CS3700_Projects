@@ -3,11 +3,16 @@
 import argparse, socket, time, json, select, struct, sys, math
 from receiver_window import ReceiverWindow
 from typing import List, Tuple
+import hashlib
 
 
 def log(message):
     sys.stderr.write(message + "\n")
     sys.stderr.flush()
+
+
+def validate_checksum(seq_no: int, data: str, checksum) -> bool:
+    return hashlib.md5((str(seq_no)+data).encode('utf-8')).hexdigest() == checksum
 
 
 class Receiver:
@@ -40,14 +45,17 @@ class Receiver:
                     self.remote_port = addr[1]
                 try:
                     msg = json.loads(data.decode('utf-8'))
-                except ValueError:
-                    log("Broken json")
-                    sys.exit(1)
-                log("Received data message %s" % msg)
+                    received_seq_no = msg["header"]["sno"]
+                    received_data = msg["body"]["data"]
+                    checksum = msg["checksum"]
 
-                # Print out the data to stdout
-                received_seq_no = msg["header"]["sno"]
-                received_data = msg["body"]["data"]
+                    if not validate_checksum(received_seq_no, received_data, checksum):
+                        log("Dropping broken Json")
+                        continue
+                except (ValueError, KeyError):
+                    log("Dropping broken Json")
+                    continue
+                log("Received data message %s" % msg)
 
                 # sack skeleton has been added. Can be used later on but will rely on RTT estimation to handle packet
                 # losses for now.
