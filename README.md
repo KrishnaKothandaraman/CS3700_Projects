@@ -25,3 +25,13 @@ forwarding packets to their destination IP.
 - Router is smart enough to handle relationships with peers, providers and customers and only forwards data when it is
 economically feasible for the router.
 
+#### Project 4 - Reliable Transport Protocol
+- Implemented my own version of TCP that guarantees reliable inorder transmission of packets.
+- Protocol can detect and recover from
+  - Reordered packets
+  - Dropped packets
+  - Corrupted packets
+  - High/low network latency
+  - High/low network bandwidth
+- Network latency is sampled using both steps of Karn's algorithm to adjust transmission speed
+- Additive increase and multiplicative decrease are used to handle high/low bandwidth.

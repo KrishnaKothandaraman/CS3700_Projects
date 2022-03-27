@@ -48,7 +48,7 @@ scenarios in the future tests.
 became better. I fixed this issue by writing the reset_expiry method in Sender.
 
 ## Features of good design.
-- One feature of good design that I always judge my code with is : How much code old do I need to rewrite to implement a new feature?
+- One feature of good design that I always judge my code with is : How much old code do I need to rewrite to implement a new feature?
 Because of my rather robust and scalable window implementations, I did not have to rewrite any old code to pass higher level tests.
 The implementation of the receiver window did not change after the implementation of the second level test.
 - Since I implemented both features of Karn's algorithm, my code is able to quickly improve when network conditions get better
