@@ -66,9 +66,11 @@ class SenderWindow:
         self.packets_in_network -= 1
 
     def get_seq_no(self) -> int:
+        """Returns last sequence number sent"""
         return self.last_sent
 
     def all_data_acked(self) -> bool:
+        """Checks if all data sent has been acked"""
         return self.last_sent == self.last_successful_ack
 
     def get_data_from_seq_no(self, target) -> str:
@@ -79,7 +81,7 @@ class SenderWindow:
                 return data
         return ""
 
-    def get_retransmit_data(self, ack: int, SACK: list[int]) -> List[Packet]:
+    def get_retransmit_data(self, ack: int, SACK: List[int]) -> List[Packet]:
         """Gets allowable number packets between last ack that are not in SACK"""
         num_packets = self.max_buffer_size - self.packets_in_network + 1
 

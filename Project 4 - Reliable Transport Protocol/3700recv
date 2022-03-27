@@ -12,10 +12,12 @@ def log(message):
 
 
 def validate_checksum(seq_no: int, data: str, checksum) -> bool:
-    return hashlib.md5((str(seq_no)+data).encode('utf-8')).hexdigest() == checksum
+    """Validates that the message received is not corrupted"""
+    return hashlib.md5((str(seq_no) + data).encode('utf-8')).hexdigest() == checksum
 
 
 class Receiver:
+    """Mimics a receiver during TCP data exchange"""
     tcp_buffer: ReceiverWindow
     next_expected_packet: int
 
@@ -34,6 +36,7 @@ class Receiver:
         self.socket.sendto(json.dumps(message).encode('utf-8'), (self.remote_host, self.remote_port))
 
     def run(self):
+        """Main run method"""
         while True:
             socks = select.select([self.socket], [], [])[0]
             for conn in socks:
@@ -71,8 +74,8 @@ class Receiver:
                     self.send({"header": {"sno": received_seq_no, "sack": self.tcp_buffer.get_buffer_seq_nos()},
                                "body": {"type": "ack"}})
 
-    # TODO: This can be made async too
     def print_data(self, packet: List[Tuple[int, str]]) -> None:
+        """Prints received data in order"""
         if not packet:
             return
 

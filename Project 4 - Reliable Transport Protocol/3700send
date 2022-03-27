@@ -2,15 +2,16 @@
 
 import argparse, socket, json, select, sys
 import datetime
-from typing import Dict, Tuple, Set
+from typing import Dict, Tuple, Set, List
 from sender_window import SenderWindow
 import hashlib
 
-Packet_Timer = Tuple[datetime.datetime, float]
+Packet_Timer = Tuple[datetime.datetime, int, float]
 
 DATA_SIZE = 1375
 MAX_WINDOW_SIZE = 5
 TCP_TIMEOUT_ALPHA = 0.875
+RTT_multiplier = 1.75
 
 
 def log(message):
@@ -19,20 +20,31 @@ def log(message):
 
 
 def create_message(seq_no: int, data: str) -> dict:
+    """
+    Builds a TCP frame with checksum
+    :param seq_no: Sequence number of packet
+    :param data: Data in packet
+    :return: Dictionary containing the message
+    """
     checksum = hashlib.md5((str(seq_no) + data).encode('utf-8')).hexdigest()
     return {"header": {"sno": seq_no}, "body": {"type": "msg", "data": data}, "checksum": checksum}
 
 
-def is_expired(sent_time: datetime.datetime, expiry_time) -> bool:
+def is_expired(sent_time: datetime.datetime, RTT_factor, expiry_time) -> bool:
+    """Checks if a message has expired or not."""
     return (datetime.datetime.now() - sent_time).total_seconds() > expiry_time
 
 
 class Sender:
+    """
+    Class that mimics a sender during TCP data exchange
+    """
     tcp_buffer: SenderWindow
     packetTimer: Dict[int, Packet_Timer]
     RTT: float
     waiting: bool
     retransmitted_packets: Set[int]
+    RTT_backoff_factor: int
 
     def __init__(self, host, port):
         self.host = host
@@ -45,6 +57,7 @@ class Sender:
         self.packetTimer = {}
         self.all_data_sent = False
         self.RTT = 1
+        self.RTT_backoff_factor = 1
         self.retransmitted_packets = set()
 
     def send(self, message, seq_no: int) -> None:
@@ -53,11 +66,13 @@ class Sender:
         :param seq_no: Seq_no of packet
         :param message: Message to be sent
         """
-        self.packetTimer[seq_no] = (datetime.datetime.now(), 2 * self.RTT)
+        self.packetTimer[seq_no] = (datetime.datetime.now(), self.RTT_backoff_factor,
+                                    RTT_multiplier * self.RTT * self.RTT_backoff_factor)
         log("Sending message '%s'" % message)
         self.socket.sendto(json.dumps(message).encode('utf-8'), (self.host, self.remote_port))
 
     def run(self):
+        """Main run method"""
         while True:
             sockets = [self.socket, sys.stdin] if not self.waiting else [self.socket]
             socks = select.select(sockets, [], [], 0.1)[0]
@@ -72,24 +87,28 @@ class Sender:
                     try:
                         msg = json.loads(k.decode('utf-8'))
                         received_seq_no = msg["header"]["sno"]
+                        sack = msg["header"]["sack"]
                     except (KeyError, ValueError):
                         log("Dropping broken json")
                         continue
                     log("Received message '%s'" % msg)
 
-                    self.tcp_buffer.set_ack_no(received_seq_no)
-
                     if received_seq_no in self.packetTimer:
+
+                        self.tcp_buffer.set_ack_no(received_seq_no)
 
                         if received_seq_no not in self.retransmitted_packets:
                             self.resample_RTT(self.packetTimer[received_seq_no][0])
+                            self.RTT_backoff_factor = 1
+                            self.reset_expiry()
 
                         del self.packetTimer[received_seq_no]
 
-                    self.tcp_buffer.additive_increase()
-                    self.waiting = False
-                    self.send_expired_data()
-                    self.send_new_data()
+                        self.tcp_buffer.additive_increase()
+                        self.waiting = False
+                        self.clean_SACK(sack)
+                        self.send_expired_data()
+                        self.send_new_data()
 
                     if self.all_data_sent:
                         self.try_to_exit()
@@ -105,17 +124,41 @@ class Sender:
                     self.send_expired_data()
                     self.send_new_data(data)
 
+    def reset_expiry(self) -> None:
+        """If a packet was sent during bad network state after which a full round trip without retransmission
+        occurred, packet expiry is reset"""
+
+        for seq_no in self.packetTimer:
+            time_sent = self.packetTimer[seq_no][0]
+            RTT_backoff_during_send = self.packetTimer[seq_no][1]
+            time_since_sent = (datetime.datetime.now() - time_sent).total_seconds()
+            if RTT_backoff_during_send > 1:
+                self.packetTimer[seq_no] = (time_sent, RTT_backoff_during_send,
+                                            (RTT_multiplier * self.RTT * self.RTT_backoff_factor) - time_since_sent)
+
+    def clean_SACK(self, sacks: List[int]) -> None:
+        """Removes packets that have been received, but not acked due to the network dropping the ack. Saves them from
+        being retransmitted"""
+        for sack in sacks:
+            if sack in self.packetTimer:
+                del self.packetTimer[sack]
+                self.tcp_buffer.set_ack_no(sack)
+
     def resample_RTT(self, sent_time: datetime.datetime) -> None:
+        """Samples RTT and re-estimates it"""
         packetRTT = (datetime.datetime.now() - sent_time).total_seconds()
 
         self.RTT = TCP_TIMEOUT_ALPHA * self.RTT + (1 - TCP_TIMEOUT_ALPHA) * packetRTT
 
     def try_to_exit(self):
+        """Quits if all data has been acked"""
         if self.tcp_buffer.all_data_acked():
             log("All done!")
             sys.exit(0)
 
     def send_expired_data(self):
+        """Sends packets that have timed out"""
+        had_to_retransmit = False
         for seq_no in self.packetTimer:
 
             if not is_expired(*self.packetTimer[seq_no]):
@@ -130,9 +173,14 @@ class Sender:
             msg = create_message(seq_no, data)
             self.retransmitted_packets.add(seq_no)
             self.send(msg, seq_no)
+            had_to_retransmit = True
+
+        if had_to_retransmit:
             self.tcp_buffer.multiplicative_decrease()
+            self.RTT_backoff_factor *= 2
 
     def send_new_data(self, data: str = "") -> None:
+        """Sends new data read from stdin."""
         if data:
             self.tcp_buffer.add_data(data)
         data_to_send = self.tcp_buffer.get_data_to_send()

@@ -50,7 +50,7 @@ class ReceiverWindow:
         """Returns True if seq_no is already in buffer. False otherwise"""
         return seq_no in self.bufferedSequenceNos
 
-    def get_buffer_seq_nos(self) -> list[int]:
+    def get_buffer_seq_nos(self) -> List[int]:
         """Returns sequence numbers of buffered data"""
         return list(map(lambda x: x[0], self.buffer))
 
