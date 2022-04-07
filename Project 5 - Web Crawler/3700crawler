@@ -1,0 +1,246 @@
+#!/usr/bin/env python3
+
+import argparse
+import random
+import socket
+import ssl
+import sys
+from typing import List
+import re
+from html_parser import Parser, TargetType
+
+DEFAULT_SERVER = "project5.3700.network"
+DEFAULT_PORT = 443
+
+
+def get_status(header: str) -> str:
+    """
+    return the status code in the given header
+    :param header:
+    :return:
+    """
+    return re.split("\r\n", header)[0][9:12]
+
+
+def get_next_location(header: str) -> str:
+    """
+    get the next location if the given header includes the location header
+    :return: return the new location in the header
+    """
+    headers = re.split("\r\n", header)
+    next_location = ""
+    for head in headers:
+        if len(head) >= 8 and head[0:8] == "Location":
+            next_location = head[10:]
+    return next_location
+
+
+def validate_link(relative_link: str):
+    """Validates a link to make sure it only points to fakebook"""
+    return len(relative_link) >= 10 and relative_link[:10] == "/fakebook/"
+
+
+class Crawler:
+    def __init__(self, args):
+        self.server = args.server
+        self.port = args.port
+        self.username = args.username
+        self.password = args.password
+        self.socket = None
+        self.csrftoken = ""
+        self.session_id = ""
+        self.frontier = []
+        self.visited = set()
+
+    def run(self):
+        self.login()
+
+    def send(self, request: str) -> str:
+        mysocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.socket = ssl.create_default_context().wrap_socket(mysocket, server_hostname=self.server)
+        self.socket.connect((self.server, self.port))
+        self.socket.send(request.encode('ascii'))
+        data = self.socket.recv(5000).decode('utf-8')
+        if self.chunked(data):
+            return self.reassemble(data)
+        else:
+            return data
+
+    def chunked(self, data: str) -> bool:
+        """
+        check if the given data is the last chunk of data received
+        :param data: data received from socket
+        :return: true if the data is the last chunk, or false otherwise
+        """
+        data_split = re.split("\r\n", data)
+        for h in data_split:
+            if len(h) >= 18 and h[0:17] == "Transfer-Encoding":
+                return "chunked" in re.split("\s", h)
+        return False
+
+    def reassemble(self, data: str) -> str:
+        """
+        reassemble the chunked html in the given data
+        :param data: including a chunked html in the body part
+        :return: the data with the chunked html reassembled
+        """
+        data_list = re.split("\r\n\r\n", data)
+        header = data_list[0]
+        html = data_list[1]
+        assemble = ""
+        skip = True
+        for s in re.split("\r\n", html):
+            if not skip:
+                assemble += s
+            skip = not skip
+        return header + "\r\n\r\n" + assemble
+
+    def process_login_page(self) -> (str, str):
+        """This method sends a request to the login page and returns the HTML and login cookie from the header"""
+        request = f'GET /accounts/login/ HTTP/1.1\r\nHost:{self.server}:{self.port}\r\n\r\n'
+        data = self.send(request)
+        texts = re.split("\r\n", data)
+        login_cookie = ""
+        for s in texts:
+            if len(s) >= 10 and s[0:10] == "Set-Cookie":
+                elements = re.split("\s", s)
+                for ele in elements:
+                    if len(ele) >= 9 and ele[0:9] == "csrftoken":
+                        login_cookie = ele[0:len(ele) - 1]
+        return data, login_cookie
+
+    def login(self):
+        """
+        login with POST https -> 443 http -> 80
+        """
+
+        data, login_cookie = self.process_login_page()
+
+        parser = Parser(TargetType.CSRF_TOKEN_FINDER)
+        html = re.split("\r\n\r\n", data)[1]
+        parser.feed(html)
+
+        if not parser.results:
+            print("Oops could not find CSRF token")
+            sys.exit(1)
+        login_token = parser.get_token()
+
+        if login_token == "":
+            print("Could not login. No Token given")
+            sys.exit(1)
+
+        payload = f"username={self.username}&password={self.password}&csrfmiddlewaretoken={login_token}&next="
+        content_len = len(payload)
+        request = f'''POST /accounts/login/?next=/fakebook/ HTTP/1.1\r\nHost: {self.server}:{self.port}
+Cookie: {login_cookie}
+Content-Length: {content_len}
+Content-Type: application/x-www-form-urlencoded
+
+{payload}'''
+        self.parse_login_data(self.send(request))
+        # redirecting to fakebook page
+        request = f'GET /fakebook/ HTTP/1.1\r\nHost:{self.server}:{self.port}\r\n' \
+                  f'Cookie: {self.csrftoken}; {self.session_id}\r\n\r\n'
+        login_data = re.split("\r\n\r\n", self.send(request))
+
+        login_header = login_data[0]
+
+        login_html = login_data[1]
+
+        if get_status(login_header) == "200":
+            p = Parser(TargetType.LINK_FINDER)
+            p.feed(login_html)
+            self.expand_frontier(p.results["href"])
+        else:
+            print("-------LOGIN FAILED--------")
+
+        self.find_flags()
+
+    def parse_login_data(self, login_data: str) -> None:
+        """
+        get the new Cookie and session id from login response
+        :param login_data: the login response from server after login
+        :return:
+        """
+        texts = re.split("\r\n", login_data)
+        for s in texts:
+            if len(s) >= 10 and s[0:10] == "Set-Cookie":
+                elements = re.split("\s", s)
+                if s[12:21] == "csrftoken":
+                    for ele in elements:
+                        if len(ele) >= 9 and ele[0:9] == "csrftoken":
+                            self.csrftoken = ele[0:len(ele) - 1]
+                if s[12:21] == "sessionid":
+                    for ele in elements:
+                        if len(ele) >= 9 and ele[0:9] == "sessionid":
+                            self.session_id = ele[0:len(ele) - 1]
+
+    def find_flags(self):
+        """
+        Method that crawls the server and finds the 5 flags
+        :return: None
+        """
+        flag_counter = 0
+        while self.frontier:
+            next_url = self.frontier.pop(random.randint(0, len(self.frontier) - 1))
+
+            if next_url in self.visited:
+                continue
+
+            self.visited.add(next_url)
+
+            request = f"GET {next_url} HTTP/1.1\r\n"
+            headers = f"Host: {self.server}:{self.port}\r\nCookie: {self.csrftoken}; {self.session_id}\r\nConnection: " \
+                      f"keep-alive\r\n\r\n "
+
+            request += headers
+            resp = self.send(request)
+
+            header, body = resp.split("\r\n\r\n")
+            status_code = get_status(header)
+
+            if status_code == "200":
+                flagFinder = Parser(TargetType.FLAG_FINDER)
+                flagFinder.feed(body)
+
+                if "flag" in flagFinder.results:
+                    print(flagFinder.results["flag"].split(" ")[-1])
+                    flag_counter += 1
+                    if flag_counter == 5:
+                        return
+                linkFinder = Parser(TargetType.LINK_FINDER)
+                linkFinder.feed(body)
+                self.expand_frontier(linkFinder.results["href"])
+
+            elif status_code == "302":
+                self.expand_frontier([get_next_location(header)])
+                continue
+
+            elif status_code == "500":
+                self.expand_frontier([next_url])
+                continue
+
+            else:
+                continue
+
+    def expand_frontier(self, links: List[str]):
+        """
+        Expands the frontier of the crawlers by validating links and adding them to the frontier
+        :param links: List of links that need to be added to the frontier
+        :return: None
+        """
+
+        links = list(filter(lambda x: validate_link(x), links))
+        for link in links:
+            self.frontier.append(link)
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='crawl Fakebook')
+    parser.add_argument('-s', dest="server", type=str, default=DEFAULT_SERVER, help="The server to crawl")
+    parser.add_argument('-p', dest="port", type=int, default=DEFAULT_PORT, help="The port to use")
+    parser.add_argument('username', type=str, help="The username to use")
+    parser.add_argument('password', type=str, help="The password to use")
+    args = parser.parse_args()
+    sender = Crawler(args)
+    sender.run()

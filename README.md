@@ -35,3 +35,9 @@ economically feasible for the router.
   - High/low network bandwidth
 - Network latency is sampled using both steps of Karn's algorithm to adjust transmission speed
 - Additive increase and multiplicative decrease are used to handle high/low bandwidth.
+
+#### Project 5 - Web Crawler
+- Implemented a Web Crawler and a HTML parser to crawl a website of over 100,000 pages to find hidden flags.
+- Network stack used was HTTP over TLS
+- Implemented HTTP communication without the usage of requests library and developed a HTML response parser to parse
+server responses.
