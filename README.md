@@ -41,3 +41,13 @@ economically feasible for the router.
 - Network stack used was HTTP over TLS
 - Implemented HTTP communication without the usage of requests library and developed a HTML response parser to parse
 server responses.
+
+
+#### Project 6 - Distributed Key Value store(Raft implementation)
+- Implemented the raft consensus protocol for distributed systems that builds and maintains a distributed key value store
+- Implementation is able to handle and recover from
+  - Lossy networks
+  - Leader failures
+  - Network partitions(major and minor partitions)
+- Strong consistency guarantees and high availability.
+- Implementation is based on the original raft paper found [here](https://raft.github.io/raft.pdf).
