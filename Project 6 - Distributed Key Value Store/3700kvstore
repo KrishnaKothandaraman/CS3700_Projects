@@ -67,6 +67,7 @@ class Replica:
         response = {"src": self.id, "dst": src, "leader": leader, "type": "fail", "MID": mid}
         self.send(response)
 
+    
     def processMessage(self, message):
         type = message["type"]
         
