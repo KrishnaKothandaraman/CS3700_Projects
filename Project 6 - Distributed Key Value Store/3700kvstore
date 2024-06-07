@@ -18,6 +18,9 @@ class ReplicaState(Enum):
     CANDIDATE = auto()
     LEADER    = auto()
 
+class LogEntries:
+    pass
+
 class Replica:
     def __init__(self, port, id, others):
         self.port = port
@@ -27,9 +30,10 @@ class Replica:
         self.socket.bind(('localhost', 0))
         self.currentTerm = 0
         self.votedFor = None
-        self.voteCount = 0
+        self.votesReceived = set()
         self.majority = math.ceil((len(self.others) + 1) / 2)
-        self.log = []
+        self.log: LogEntries = []
+        self.leader = "FFFF"
         self.commitIndex = 0
         self.lastApplied = 0
         self.nextIndex = []
@@ -46,6 +50,15 @@ class Replica:
     def send(self, message):
         print(f"Sending {message}")
         self.socket.sendto(json.dumps(message).encode('utf-8'), ('localhost', self.port))
+
+    def getLastLogTerm(self):
+        if len(self.log) == 0:
+            return 0
+        
+        return self.log[-1]["term"]
+
+    def cancelElectionTimer(self):
+        self.lastHeartBeatTime = datetime.now()
 
     def processGetMessage(self, message):
         
@@ -67,46 +80,100 @@ class Replica:
         response = {"src": self.id, "dst": src, "leader": leader, "type": "fail", "MID": mid}
         self.send(response)
 
-    
+    def processRequestVote(self, message):
+
+        src = message["src"]
+        cTerm = message["term"]
+        cLastLogIdx = message["lastLogIdx"]
+        cLastLogTerm = message["lastLogTerm"]
+
+        if cTerm > self.currentTerm:
+            self.currentTerm = cTerm
+            self.votedFor = None
+            self.votesReceived = set()
+            self.status = ReplicaState.FOLLOWER
+        
+        lastLogTerm = self.getLastLogTerm()
+
+        cLogOk = (cLastLogTerm > lastLogTerm) or (cLastLogTerm == lastLogTerm and cLastLogIdx >= len(self.log) - 1)
+        voteResponse = {"src": self.id, "dst": src, "leader": self.leader,  "type": "RequestVoteResponse", "srcTerm": self.currentTerm}
+
+        if cLogOk and self.state == ReplicaState.FOLLOWER and cTerm == self.currentTerm and self.votedFor != src:
+            self.votedFor = src
+            voteResponse["granted"] = True
+        else:
+            voteResponse["granted"] = False
+        
+        self.send(voteResponse)
+
+    def processRequestVoteResponse(self, message):
+
+        src = message["src"]
+        dst = message["dst"]
+        srcTerm = message["srcTerm"]
+        voteGranted = message["granted"]
+
+        if srcTerm > self.currentTerm:
+            self.status = ReplicaState.FOLLOWER
+            self.votedFor = None
+            self.votesReceived = set()
+            self.cancelElectionTimer()
+        
+        else:
+            if srcTerm == self.currentTerm and voteGranted and src not in self.votesReceived:
+                self.votesReceived.add(src)
+                
+                if len(self.votesReceived) >= self.majority:
+                    self.state = ReplicaState.LEADER
+                    self.leader = self.id
+                    print("I have become the leader!")
+                    message = {"src": self.id, "dst": "FFFF", "leader": self.leader,  "type": "AppendEntries", "srcTerm": self.currentTerm}
+                    self.send(message)
+
     def processMessage(self, message):
         type = message["type"]
         
+        if message["src"] == self.id:
+            # message sent by us received back. Should not be possible
+            print("Received back a message sent from me. Ignoring")
+            return
         if type == "get":
             self.processGetMessage(message)
         elif type == "put":
             self.processPutMessage(message)
+        elif type == "RequestVote":
+            self.processRequestVote(message)
+        elif type == "RequestVoteResponse":
+            self.processRequestVoteResponse(message)
         else:
             # TODO: Let's implemented process RequestVoteRPC then
             raise NotImplementedError(f"Message {type} not implemented yet")
 
     def hasElectionTimedOut(self):
-        return (datetime.now() - self.lastHeartBeatTime).microseconds * 1000 > self.electionTimeout
-    
-    def sendRequestVote(self):
+        return (datetime.now() - self.lastHeartBeatTime).microseconds / 1000 > self.electionTimeout
+
+    def startElection(self):
+        self.currentTerm += 1
+        self.state = ReplicaState.CANDIDATE
+        self.votedFor = self.id
+        self.votesReceived.add(self.id)
+        print(f"I {self.id} have become a candidate for term {self.currentTerm} needing {self.majority} votes to win")
         msg = {
             "type": "RequestVote",
             "src": self.id,
             "dst": "FFFF",
             "term": self.currentTerm,
             "leader": "FFFF",
-            "lastLogIdx": len(self.log) - 1, #TODO: Make this better
-            "lastLogTerm": len(self.log) - 1 #TODO: This is crap
+            "lastLogIdx": len(self.log) - 1,
+            "lastLogTerm": self.getLastLogTerm()
         }
-
+        self.cancelElectionTimer()
         self.send(msg)
-        
-    def startElection(self):
-        self.currentTerm += 1
-        self.state = ReplicaState.CANDIDATE
-        self.votedFor = self.id
-        print(f"I {self.id} have become a candidate for term {self.currentTerm} needing {self.majority} votes to win")
-        self.sendRequestVote()
 
     def run(self):
         while True:
             if self.hasElectionTimedOut():
                 self.startElection()
-            
             data, addr = self.socket.recvfrom(65535)
             msg = data.decode('utf-8')
             print("Received message '%s'" % (msg,), flush=True)
