@@ -40,6 +40,7 @@ class Replica:
         self.matchIndex = []
         self.state = ReplicaState.FOLLOWER
         self.electionTimeout = random.randint(150, 300)
+        self.heartBeatTimer = 30 # 30 ms
         self.lastHeartBeatTime = datetime.now()
 
         print("Replica %s starting up with election timeout %s" % (self.id, self.electionTimeout), flush=True)
@@ -67,7 +68,10 @@ class Replica:
         leader = message["leader"]
         mid = message["MID"]
 
-        response = {"src": self.id, "dst": src, "leader": leader, "type": "fail", "MID": mid}
+        if self.state == ReplicaState.FOLLOWER and self.leader != "FFFF":
+            response = {"src": self.id, "dst": src, "leader": leader, "type": "redirect", "MID": mid}
+        else:
+            response = {"src": self.id, "dst": src, "leader": leader, "type": "fail", "MID": mid}
         self.send(response)
 
     def processPutMessage(self, message):
@@ -77,7 +81,10 @@ class Replica:
         leader = message["leader"]
         mid = message["MID"]
 
-        response = {"src": self.id, "dst": src, "leader": leader, "type": "fail", "MID": mid}
+        if self.state == ReplicaState.FOLLOWER and self.leader != "FFFF":
+            response = {"src": self.id, "dst": src, "leader": leader, "type": "redirect", "MID": mid}
+        else:
+            response = {"src": self.id, "dst": src, "leader": leader, "type": "fail", "MID": mid}
         self.send(response)
 
     def processRequestVote(self, message):
@@ -127,12 +134,12 @@ class Replica:
                     self.state = ReplicaState.LEADER
                     self.leader = self.id
                     print("I have become the leader!")
-                    message = {"src": self.id, "dst": "FFFF", "leader": self.leader,  "type": "AppendEntriesRequest", "term": self.currentTerm}
-                    self.send(message)
+                    self.sendAppendEntries()
 
-    def cancelHeartBeatTimer(self):
-        # Implement this later
-        return
+    def sendAppendEntries(self):
+        message = {"src": self.id, "dst": "FFFF", "leader": self.leader,  "type": "AppendEntriesRequest", "term": self.currentTerm}
+        self.lastHeartBeatTime = datetime.now()
+        self.send(message)
     
     def processAppendEntriesRequest(self, message):
         
@@ -142,14 +149,14 @@ class Replica:
 
         if leaderTerm > self.currentTerm:
             self.currentTerm = leaderTerm
-            self.leader = leaderId
             self.state = ReplicaState.FOLLOWER
         
         logOk = True # Replace this with log replication logic
         msg = {"src": self.id, "dst": src, "leader" : self.leader, "term": self.currentTerm, "type": "AppendEntriesResponse"}
-        if (self.currentTerm == leaderTerm):
+        if (self.currentTerm == leaderTerm) and logOk:
+            self.leader = leaderId
             msg["granted"] = True
-            self.cancelHeartBeatTimer()
+            self.cancelElectionTimer()
         else:
             msg["granted"] = False
         self.send(msg)
@@ -165,8 +172,7 @@ class Replica:
             self.state = ReplicaState.FOLLOWER
             self.votedFor = None
             self.votesReceived = set()
-        
-        
+        # to enhance this with the logic to handle failed AppendEntriesRPC
 
     def processMessage(self, message):
         type = message["type"]
@@ -185,7 +191,7 @@ class Replica:
             self.processRequestVoteResponse(message)
         elif type == "AppendEntriesRequest":
             self.processAppendEntriesRequest(message)
-        elif type == "AppendEntiresResponse":
+        elif type == "AppendEntriesResponse": 
             self.processAppendEntriesResponse(message)
         else:
             # TODO: Let's implemented process RequestVoteRPC then
@@ -194,6 +200,9 @@ class Replica:
     def hasElectionTimedOut(self):
         return (datetime.now() - self.lastHeartBeatTime).microseconds / 1000 > self.electionTimeout
 
+    def hasHeartBeatTimedOut(self):
+        return (datetime.now() - self.lastHeartBeatTime).microseconds / 1000 > self.heartBeatTimer
+    
     def startElection(self):
         self.currentTerm += 1
         self.state = ReplicaState.CANDIDATE
@@ -212,9 +221,12 @@ class Replica:
         self.cancelElectionTimer()
         self.send(msg)
 
+
     def run(self):
         while True:
-            if self.hasElectionTimedOut():
+            if self.state == ReplicaState.LEADER and self.hasHeartBeatTimedOut():
+                self.sendAppendEntries()
+            if self.state == ReplicaState.FOLLOWER and self.hasElectionTimedOut():
                 self.startElection()
             data, addr = self.socket.recvfrom(65535)
             msg = data.decode('utf-8')
