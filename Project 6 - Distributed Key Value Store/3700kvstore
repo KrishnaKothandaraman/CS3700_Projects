@@ -98,9 +98,10 @@ class Replica:
         cLogOk = (cLastLogTerm > lastLogTerm) or (cLastLogTerm == lastLogTerm and cLastLogIdx >= len(self.log) - 1)
         voteResponse = {"src": self.id, "dst": src, "leader": self.leader,  "type": "RequestVoteResponse", "srcTerm": self.currentTerm}
 
-        if cLogOk and self.state == ReplicaState.FOLLOWER and cTerm == self.currentTerm and self.votedFor != src:
+        if cLogOk and self.state == ReplicaState.FOLLOWER and cTerm == self.currentTerm and (self.votedFor is None or self.votedFor == src):
             self.votedFor = src
             voteResponse["granted"] = True
+            self.cancelElectionTimer()
         else:
             voteResponse["granted"] = False
         
@@ -120,15 +121,52 @@ class Replica:
             self.cancelElectionTimer()
         
         else:
-            if srcTerm == self.currentTerm and voteGranted and src not in self.votesReceived:
+            if (srcTerm == self.currentTerm and self.state != ReplicaState.LEADER) and voteGranted and src not in self.votesReceived:
                 self.votesReceived.add(src)
-                
                 if len(self.votesReceived) >= self.majority:
                     self.state = ReplicaState.LEADER
                     self.leader = self.id
                     print("I have become the leader!")
-                    message = {"src": self.id, "dst": "FFFF", "leader": self.leader,  "type": "AppendEntries", "srcTerm": self.currentTerm}
+                    message = {"src": self.id, "dst": "FFFF", "leader": self.leader,  "type": "AppendEntriesRequest", "term": self.currentTerm}
                     self.send(message)
+
+    def cancelHeartBeatTimer(self):
+        # Implement this later
+        return
+    
+    def processAppendEntriesRequest(self, message):
+        
+        src = message["src"]
+        leaderId = message["leader"]
+        leaderTerm = message["term"]
+
+        if leaderTerm > self.currentTerm:
+            self.currentTerm = leaderTerm
+            self.leader = leaderId
+            self.state = ReplicaState.FOLLOWER
+        
+        logOk = True # Replace this with log replication logic
+        msg = {"src": self.id, "dst": src, "leader" : self.leader, "term": self.currentTerm, "type": "AppendEntriesResponse"}
+        if (self.currentTerm == leaderTerm):
+            msg["granted"] = True
+            self.cancelHeartBeatTimer()
+        else:
+            msg["granted"] = False
+        self.send(msg)
+
+    def processAppendEntriesResponse(self, message):
+
+        src = message["src"]
+        granted = message["granted"]
+        srcTerm = message["term"]
+        
+        if srcTerm > self.currentTerm:
+            self.currentTerm = srcTerm
+            self.state = ReplicaState.FOLLOWER
+            self.votedFor = None
+            self.votesReceived = set()
+        
+        
 
     def processMessage(self, message):
         type = message["type"]
@@ -145,6 +183,10 @@ class Replica:
             self.processRequestVote(message)
         elif type == "RequestVoteResponse":
             self.processRequestVoteResponse(message)
+        elif type == "AppendEntriesRequest":
+            self.processAppendEntriesRequest(message)
+        elif type == "AppendEntiresResponse":
+            self.processAppendEntriesResponse(message)
         else:
             # TODO: Let's implemented process RequestVoteRPC then
             raise NotImplementedError(f"Message {type} not implemented yet")
