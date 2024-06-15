@@ -27,41 +27,45 @@ class LogEntry:
         self.term = term
         self.value = value
         self.key = key
+    
+    def to_dict(self):
+        return {"term": self.term, "key": self.key, "value": self.value} 
 
 class Replica:
     def __init__(self, port, id, others):
-        self.port = port
-        self.id = id
-        self.others = others
-        self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.socket.bind(('localhost', 0))
+        # Variables that I do not expect to change during the execution of the algo
+        self._port = port
+        self._id = id
+        self._others = others
+        self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self._socket.bind(('localhost', 0))
+        self._majority = math.ceil((len(self._others) + 1) / 2)
+        self._electionTimeout = random.randint(200, 300)
+        self._heartBeatTimer = 30 # 30 ms
+        self._lastHeartBeatTime = datetime.now()
+
+        # volatile variables 
         self.currentTerm = 0
         self.votedFor = None
         self.votesReceived = set()
-        self.majority = math.ceil((len(self.others) + 1) / 2)
-        self.log: LogEntry = []
-        self.stateMachine = {}
-        # queue to buffer messages when leader is not yet known.
-        # TODO: Add a timeout logic to this to periodically flush the buffer. For now I just flush it at the end of an election
-        self.bufferedMessages = []
-        self.leader = "FFFF"
+        self.log: List[LogEntry] = []
         self.commitIndex = 0
         self.lastApplied = 0
-        self.nextIndex = []
-        self.matchIndex = []
+        self.nextIndex = {}
+        self.matchIndex = {}
+        self.stateMachine = {}
         self.state = ReplicaState.FOLLOWER
-        self.electionTimeout = random.randint(200, 300)
-        self.heartBeatTimer = 30 # 30 ms
-        self.lastHeartBeatTime = datetime.now()
+        self.bufferedMessages = []
+        self.leader = "FFFF"
 
-        print("Replica %s starting up with election timeout %s" % (self.id, self.electionTimeout), flush=True)
-        hello = { "src": self.id, "dst": BROADCAST, "leader": BROADCAST, "type": "hello" }
+        print("Replica %s starting up with election timeout %s" % (self._id, self._electionTimeout), flush=True)
+        hello = { "src": self._id, "dst": BROADCAST, "leader": BROADCAST, "type": "hello" }
         self.send(hello)
         print("Sent hello message: %s" % hello, flush=True)
 
     def send(self, message):
         print(f"Sending {message}")
-        self.socket.sendto(json.dumps(message).encode('utf-8'), ('localhost', self.port))
+        self._socket.sendto(json.dumps(message).encode('utf-8'), ('localhost', self._port))
 
     def getLastLogTerm(self):
         if len(self.log) == 0:
@@ -70,7 +74,7 @@ class Replica:
         return self.log[-1].term
 
     def cancelElectionTimer(self):
-        self.lastHeartBeatTime = datetime.now()
+        self._lastHeartBeatTime = datetime.now()
 
     def processGetMessage(self, message):
         
@@ -80,9 +84,9 @@ class Replica:
         key = message["key"]
 
         if self.state == ReplicaState.FOLLOWER and self.leader != "FFFF":
-            response = {"src": self.id, "dst": src, "leader": self.leader, "type": "redirect", "MID": mid}
+            response = {"src": self._id, "dst": src, "leader": self.leader, "type": "redirect", "MID": mid}
         elif self.state == ReplicaState.LEADER:
-            response = {"src": self.id, "dst": src, "leader": self.leader, "type": "ok", "MID": mid, "value": self.stateMachine.get(key, "")}
+            response = {"src": self._id, "dst": src, "leader": self.leader, "type": "ok", "MID": mid, "value": self.stateMachine.get(key, "")}
         else:
             self.bufferedMessages.append(message)
         self.send(response)
@@ -96,12 +100,12 @@ class Replica:
         value = message["value"]
 
         if self.state == ReplicaState.FOLLOWER and self.leader != "FFFF":
-            response = {"src": self.id, "dst": src, "leader": self.leader, "type": "redirect", "MID": mid}
+            response = {"src": self._id, "dst": src, "leader": self.leader, "type": "redirect", "MID": mid}
         elif self.state == ReplicaState.LEADER:
             logEntry = LogEntry(self.currentTerm, key, value)
             self.log.append(logEntry)
             self.stateMachine[key] = value
-            response = {"src": self.id, "dst": src, "leader": self.leader, "type": "ok", "MID": mid}
+            response = {"src": self._id, "dst": src, "leader": self.leader, "type": "ok", "MID": mid}
         else:
             # If we don't know the leader we buffer the message so that we can handle it later on
             self.bufferedMessages.append(message)
@@ -124,7 +128,7 @@ class Replica:
         lastLogTerm = self.getLastLogTerm()
 
         cLogOk = (cLastLogTerm > lastLogTerm) or (cLastLogTerm == lastLogTerm and cLastLogIdx >= len(self.log) - 1)
-        voteResponse = {"src": self.id, "dst": src, "leader": self.leader,  "type": "RequestVoteResponse", "srcTerm": self.currentTerm}
+        voteResponse = {"src": self._id, "dst": src, "leader": self.leader,  "type": "RequestVoteResponse", "srcTerm": self.currentTerm}
 
         if cLogOk and self.state == ReplicaState.FOLLOWER and cTerm == self.currentTerm and (self.votedFor is None or self.votedFor == src):
             self.votedFor = src
@@ -151,16 +155,44 @@ class Replica:
         else:
             if (srcTerm == self.currentTerm and self.state != ReplicaState.LEADER) and voteGranted and src not in self.votesReceived:
                 self.votesReceived.add(src)
-                if len(self.votesReceived) >= self.majority:
+                if len(self.votesReceived) >= self._majority:
                     self.state = ReplicaState.LEADER
-                    self.leader = self.id
+                    self.leader = self._id
                     print("I have become the leader!")
-                    self.sendAppendEntries()
+                    for node_id in self._others:
+                        if node_id == self._id:
+                            continue
+                        self.matchIndex[node_id] = 0
+                        self.nextIndex[node_id] = len(self.log)
+                        self.replicateLog(self._id, node_id)
+                    self._lastHeartBeatTime = datetime.now()
                     self.flushPendingMessageBuffer()
 
-    def sendAppendEntries(self):
-        message = {"src": self.id, "dst": "FFFF", "leader": self.leader,  "type": "AppendEntriesRequest", "term": self.currentTerm}
-        self.lastHeartBeatTime = datetime.now()
+    def _log_to_json(self, log: List[LogEntry]):
+        serializedLog = []
+        for entry in log:
+            serializedLog.append(entry.to_dict())
+        return serializedLog
+    def replicateLog(self, sender_id, receiver_id):
+        prefix_len = self.nextIndex[receiver_id]
+
+        suffix = self._log_to_json(self.log[min(len(self.log) - 1, prefix_len):])
+        prefix_term = 0
+        
+        #if prefix_len > 0:
+        #    prefix_term = self.log[prefix_len - 1].term
+        
+        message = {
+            "src": sender_id,
+            "dst": receiver_id,
+            "leader": self.leader,
+            "type": "AppendEntriesRequest",
+            "currentTerm": self.currentTerm,
+            "prefixTerm": prefix_term,
+            "prefixLength": prefix_len,
+            "suffix": suffix,
+            "commitIndex": self.commitIndex
+        }
         self.send(message)
     
     def flushPendingMessageBuffer(self):
@@ -169,38 +201,60 @@ class Replica:
             self.processMessage(message)
         self.bufferedMessages = []
 
+    def appendNewLogEntries(self):
+        pass
+        #implement the append entries/commit logic here
+
+
     def processAppendEntriesRequest(self, message):
         
         src = message["src"]
         leaderId = message["leader"]
-        leaderTerm = message["term"]
-
+        leaderTerm = message["currentTerm"]
+        suffix = message["suffix"]
+        prefixLength = message["prefixLength"]
+        prefixTerm = message["prefixTerm"]
+        commitIndex = message["commitIndex"]
+        
         if leaderTerm > self.currentTerm:
             self.currentTerm = leaderTerm
-            self.state = ReplicaState.FOLLOWER
-        
-        logOk = True # Replace this with log replication logic
-        msg = {"src": self.id, "dst": src, "term": self.currentTerm, "type": "AppendEntriesResponse"}
-        if (self.currentTerm == leaderTerm) and logOk:
+            self.votedFor = None
+        if self.currentTerm == leaderTerm:
             self.leader = leaderId
-            msg["granted"] = True
             self.state = ReplicaState.FOLLOWER
-            self.flushPendingMessageBuffer()
+
+        #logOk = (len(self.log) >= prefixLength) and (prefixLength == 0 or self.log[prefixLength].term == prefixTerm)
+        logOk = True
+        msg = {"src": self._id, "dst": src, "term": self.currentTerm, "type": "AppendEntriesResponse"}
+        if self.currentTerm == leaderTerm and logOk:
+            self.appendNewLogEntries()
+            msg["granted"] = True
+            msg["ackLength"] = prefixLength + len(suffix)
             self.cancelElectionTimer()
             print(f"I now bow down to my leader {self.leader} in term {self.currentTerm}", flush=True)
         else:
             msg["granted"] = False
+            msg["ackLength"] = 0
 
-        # this gets set at the end as the leader may get set in the if statement above
+        # this gets set at the end as the leader may not get set in the if statement above
         msg["leader"] = self.leader
         self.send(msg)
+        self.flushPendingMessageBuffer()
 
     def processAppendEntriesResponse(self, message):
 
         src = message["src"]
         granted = message["granted"]
         srcTerm = message["term"]
-        
+        ackLength = message["ackLength"]
+
+        if srcTerm == self.currentTerm and self.state == ReplicaState.LEADER:
+            if ackLength > self.matchIndex[src]:
+                self.nextIndex[src] = ackLength
+                self.matchIndex[src] = ackLength
+
+        # enchance this with failed append entries rpc        
+
         if srcTerm > self.currentTerm:
             self.currentTerm = srcTerm
             self.state = ReplicaState.FOLLOWER
@@ -211,7 +265,7 @@ class Replica:
     def processMessage(self, message):
         type = message["type"]
         
-        if message["src"] == self.id:
+        if message["src"] == self._id:
             # message sent by us received back. Should not be possible
             print("Received back a message sent from me. Ignoring")
             return
@@ -232,20 +286,21 @@ class Replica:
             raise NotImplementedError(f"Message {type} not implemented yet")
 
     def hasElectionTimedOut(self):
-        return (datetime.now() - self.lastHeartBeatTime).microseconds / 1000 > self.electionTimeout
+        return (datetime.now() - self._lastHeartBeatTime).microseconds / 1000 > self._electionTimeout
 
     def hasHeartBeatTimedOut(self):
-        return (datetime.now() - self.lastHeartBeatTime).microseconds / 1000 > self.heartBeatTimer
+        return (datetime.now() - self._lastHeartBeatTime).microseconds / 1000 > self._heartBeatTimer
     
     def startElection(self):
         self.currentTerm += 1
         self.state = ReplicaState.CANDIDATE
-        self.votedFor = self.id
-        self.votesReceived.add(self.id)
-        print(f"I {self.id} have become a candidate for term {self.currentTerm} needing {self.majority} votes to win")
+        self.votedFor = self._id
+        self.votesReceived.add(self._id)
+
+        print(f"I {self._id} have become a candidate for term {self.currentTerm} needing {self._majority} votes to win")
         msg = {
             "type": "RequestVote",
-            "src": self.id,
+            "src": self._id,
             "dst": "FFFF",
             "term": self.currentTerm,
             "leader": "FFFF",
@@ -259,10 +314,14 @@ class Replica:
     def run(self):
         while True:
             if self.state == ReplicaState.LEADER and self.hasHeartBeatTimedOut():
-                self.sendAppendEntries()
+                for node_id in self._others:
+                    if node_id == self._id:
+                        continue
+                    self.replicateLog(self._id, node_id)
+                self._lastHeartBeatTime = datetime.now()
             if (self.state == ReplicaState.FOLLOWER or self.state == ReplicaState.CANDIDATE) and self.hasElectionTimedOut():
                 self.startElection()
-            data, addr = self.socket.recvfrom(65535)
+            data, addr = self._socket.recvfrom(65535)
             msg = data.decode('utf-8')
             print("Received message '%s'" % (msg,), flush=True)
             self.processMessage(json.loads(msg))
