@@ -20,6 +20,7 @@ class Router:
 
     def __init__(self, asn, connections):
         print("Router at AS %s starting up" % asn)
+        print(connections) 
         self.asn = asn
         self.update_messages = []
         self.withdraw_messages = []
@@ -67,14 +68,81 @@ class Router:
         network: Network = Network(network, netmask, localpref, selfOrigin, ASPath, origin)
         self.table.add_network(src, network)
 
+        self.forwardUpdateMessage(msg)
+
+    def _sendMessageToNeighboursWithPredictate(self, msg, predicate):
+
+        for neighbour, relation in self.relations.items():
+            if predicate(neighbour, relation):
+                continue
+            msg['src'] = our_addr(neighbour)
+            msg['dst'] = neighbour
+            self.send(neighbour, json.dumps(msg))
+
+    def forwardUpdateMessage(self, msg):
+        src = msg['src']
+
+        if src not in self.relations:
+            print("WARNING: src not in relations: {src}")
+            return
+
+        msg = {
+            "type": "update",
+            "src": "", #tbd
+            "dst": "", #tbd,
+            "msg" : {
+                "network": msg['msg']["network"],
+                "netmask": msg['msg']['netmask'],
+                'ASPath': [self.asn] + msg['msg']['ASPath']
+            }
+        }
+        relation = self.relations[src]
+        if relation == "cust":
+           self._sendMessageToNeighboursWithPredictate(msg, lambda x, y: x == src)
+        elif relation == "peer" or relation == "prov":
+            self._sendMessageToNeighboursWithPredictate(msg, lambda x, y: src == x or self.relations[y] != "cust")    
+        else:
+            print("WARNING: Unknow relationship with src: {src}. This should never happen")
+
     def handleWithdrawMessage(self, msg):
         assert False, "Not Implemented yet"
 
     def handleDataMessage(self, msg):
-        assert False, "Not Implemented yet"
+        
+        src = msg['src']
+        dst = msg['dst']
+        next_hop = self.table.get_next_hop_router(dst)
+
+        if not next_hop:
+            # no next hop. Return back to source saying no route
+            msg = {
+                "src": our_addr(dst),
+                "dst": dst,
+                "msg": {},
+                "type": "no route"
+            }
+        else:
+            msg['src'] = our_addr(next_hop)
+            msg['dst'] = dst
+        
+        print(f"Forwarding/Responding to data message with {msg}")
+        self.send(next_hop, json.dumps(msg))
+
+
 
     def handleDumpMessage(self, msg):
-        assert False, "Not Implemented yet"
+        
+        src = msg['src']
+        
+        table_contents = self.table.dump()
+        msg = {
+            'src': our_addr(src),
+            'dst': src,
+            "type": "table",
+            "msg": table_contents
+        }
+
+        self.send(msg['dst'], json.dumps(msg))
 
 
 
