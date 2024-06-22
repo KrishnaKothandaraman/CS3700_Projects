@@ -105,7 +105,18 @@ class Router:
             print("WARNING: Unknow relationship with src: {src}. This should never happen")
 
     def handleWithdrawMessage(self, msg: Dict[str, Any]) -> None:
-        assert False, "Not Implemented yet"
+        
+        src = msg['src']
+
+        self.table.remove_networks_from_peer(src, msg['msg'])
+
+        relation = self.relations[src]
+        if relation == "cust":
+           self._sendMessageToNeighboursWithPredictate(msg, lambda x, y: x == src)
+        elif relation == "peer" or relation == "prov":
+            self._sendMessageToNeighboursWithPredictate(msg, lambda x, y: src == x or self.relations[y] != "cust")    
+        else:
+            print("WARNING: Unknow relationship with src: {src}. This should never happen")
 
     def handleDataMessage(self, msg: Dict[str, Any], msg_src_net: str) -> None:
         

@@ -16,6 +16,17 @@ class Table:
             self.networkMap[network_addr] = [network]
         print(f"Added new network: {network}")
 
+    def remove_networks_from_peer(self, peer_ip: str, network_list : List[Dict[str, str]]):
+        """
+            Loops through all peers and when it finds peer that equals the src, it remove all networks from that peer that are advertised in the withdraw
+            message
+        """
+        for peer_addr, networks in self.networkMap.items():
+            if peer_addr == peer_ip:
+                for network_to_remove in network_list:
+                    n = Network(network=network_to_remove["network"], netmask=network_to_remove["netmask"])
+                    if n in networks: networks.remove(n)
+            
     
     def get_next_hop_router(self, ip_addr: str) -> str:
         """

@@ -1,7 +1,7 @@
 from ip import tobin, get_bin_prefix_len
 
 class Network:
-    def __init__(self, peer_ip, network, netmask, localpref, selfOrigin, ASPath, origin):
+    def __init__(self, peer_ip = "", network = "", netmask = "", localpref = 0, selfOrigin = False, ASPath = [], origin = False):
         self.peer_ip = peer_ip
         self.network = network
         self.netmask = netmask
@@ -16,6 +16,9 @@ class Network:
         return self.__str__()
     def __str__(self):
         return f"network=\"{self.network}\",netmask=\"{self.netmask}\",localpref={self.localpref},selfOrigin={self.selfOrigin},ASPath={self.ASPath},origin=\"{self.origin}\""
+
+    def __eq__(self, other):
+        return self.network == other.network and self.netmask == other.netmask
 
     def __lt__(self, other):
         if self.localpref < other.localpref:
