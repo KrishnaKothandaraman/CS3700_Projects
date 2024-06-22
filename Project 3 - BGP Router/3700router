@@ -112,9 +112,9 @@ class Router:
 
         relation = self.relations[src]
         if relation == "cust":
-           self._sendMessageToNeighboursWithPredictate(msg, lambda x, y: x == src)
+           self._sendMessageToNeighboursWithPredictate(msg, lambda x: x == src)
         elif relation == "peer" or relation == "prov":
-            self._sendMessageToNeighboursWithPredictate(msg, lambda x, y: src == x or self.relations[y] != "cust")    
+            self._sendMessageToNeighboursWithPredictate(msg, lambda x: src == x or self.relations[x] != "cust")    
         else:
             print("WARNING: Unknow relationship with src: {src}. This should never happen")
 

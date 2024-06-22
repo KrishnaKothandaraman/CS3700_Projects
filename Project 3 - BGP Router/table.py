@@ -1,32 +1,76 @@
 
 from typing import Any, Dict, List, Optional, Tuple
+from typing_extensions import TypeAlias
 from network import Network
-
-
 
 class Table:
 
     def __init__(self) -> None:
         self.networkMap : Dict[str , List[Network]] = {}
-    
+        self.updateMessageMap: Dict[str, List[Network]] = {}
+
     def add_network(self, network_addr: str, network: Network) -> None:
         if network_addr in self.networkMap:
             self.networkMap[network_addr].append(network)
+            self.updateMessageMap[network_addr].append(network)
         else:
             self.networkMap[network_addr] = [network]
+            self.updateMessageMap[network_addr] = [network]
+
+        self.aggregateNetworks(network_addr)
         print(f"Added new network: {network}")
+
+    def aggregateNetworks(self, ip):
+        """
+        1. Group them by localpref, selfOrigin, aspath, origin
+        2. Perform route aggregation on the groups
+        """
+        hasSummarized = True
+        # keep looping while there are more to summarize
+        while hasSummarized:
+            hasSummarized = False
+            networks = self.networkMap[ip]
+            isSummarized = set()
+            aggregated_networks = []
+            for i in range(len(networks)):
+                if i in isSummarized:
+                    continue
+                for j in range(i + 1, len(networks)):
+                    if networks[i].is_summarizable(networks[j]) and networks[i].are_adjacent(networks[j]):
+                        print('Summarizing!')
+                        new_network = Network(ip, networks[i].network, networks[i].netmask, networks[i].localpref, networks[i].selfOrigin, networks[i].ASPath, networks[i].origin)
+                        new_network.summarize_self()
+                        aggregated_networks.append(new_network)
+                        isSummarized.add(j)
+                        hasSummarized = True
+                        break
+                else:
+                    aggregated_networks.append(networks[i])
+            self.networkMap[ip] = aggregated_networks
+
+    def rebuildNetworkMap(self, ip: str):
+
+        self.networkMap[ip] = []
+        for net in self.updateMessageMap[ip]:
+            self.networkMap[ip].append(net)
+        
+        self.aggregateNetworks(ip)
 
     def remove_networks_from_peer(self, peer_ip: str, network_list : List[Dict[str, str]]):
         """
             Loops through all peers and when it finds peer that equals the src, it remove all networks from that peer that are advertised in the withdraw
             message
         """
-        for peer_addr, networks in self.networkMap.items():
-            if peer_addr == peer_ip:
-                for network_to_remove in network_list:
-                    n = Network(network=network_to_remove["network"], netmask=network_to_remove["netmask"])
-                    if n in networks: networks.remove(n)
-            
+        new_updates = []
+        for network_to_remove in network_list:
+            for network in self.updateMessageMap[peer_ip]:
+                if network_to_remove['network'] == network.network and network_to_remove['netmask'] == network.netmask:
+                    continue
+                new_updates.append(network)
+        
+        self.updateMessageMap[peer_ip] = new_updates
+        self.rebuildNetworkMap(peer_ip)
+
     
     def get_next_hop_router(self, ip_addr: str) -> str:
         """

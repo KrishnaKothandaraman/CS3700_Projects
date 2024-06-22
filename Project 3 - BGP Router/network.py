@@ -1,4 +1,4 @@
-from ip import tobin, get_bin_prefix_len
+from ip import tobin, get_bin_prefix_len, summarize_ip
 
 class Network:
     def __init__(self, peer_ip = "", network = "", netmask = "", localpref = 0, selfOrigin = False, ASPath = [], origin = False):
@@ -33,6 +33,17 @@ class Network:
             return True
         else:
             return False
+
+    def are_adjacent(self, other):
+        return self.netmask_length == other.netmask_length \
+            and tobin(self.network).replace(".", "")[:self.netmask_length - 1] == tobin(other.network).replace(".", "")[:other.netmask_length - 1]
+
+    def is_summarizable(self, other):
+        return self.ASPath == other.ASPath and self.localpref == other.localpref and self.origin == other.origin and self.selfOrigin == other.selfOrigin
+    
+    def summarize_self(self):
+        self.network, self.netmask = summarize_ip(self.network, self.netmask)
+        self.netmask_length = get_bin_prefix_len(self.netmask)
 
     def containsIP(self, ip_addr):
         """
