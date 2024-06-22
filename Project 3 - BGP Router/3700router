@@ -140,7 +140,10 @@ class Router:
         dst_relation = self.relations[next_hop]
         if next_hop != msg_src_net and (src_relation != "cust" and dst_relation != "cust"):
             print(f"Dropping data message since next hop: {next_hop} is not a valid relationship {dst_relation}")
-            return
+            msg['type'] = "no route"
+            msg['msg'] = {}
+            msg['dst'] = msg_src_net
+            msg['src'] = our_addr(msg_src_net)
 
         print(f"Forwarding/Responding to data message with {msg} on {next_hop}")
         self.send(next_hop, json.dumps(msg))

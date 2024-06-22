@@ -1,5 +1,5 @@
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from network import Network
 
 
@@ -30,15 +30,28 @@ class Table:
     
     def get_next_hop_router(self, ip_addr: str) -> str:
         """
-        Filter all next hop routers in this table that ip_addr belongs to
+        Filter all next hop routers in this table that ip_addr belongs to.
+
+        1. Check for longest prefix match
+        2. If multiple longest prefixes exist, sort and return head
         """
-        filtered_list = []
+        filtered_list: List[Tuple[str, Network]] = []
         for net_addr, networks in self.networkMap.items():
             for net in networks:
                 if net.containsIP(ip_addr):
                     filtered_list.append((net_addr, net))
+        # no route
+        if len(filtered_list) == 0:
+            return ""
+        
+        # find longest prefix match in filtered_list
+        max_prefix = max(list(map(lambda x: x[1].netmask_length, filtered_list)))
+        print(max_prefix)
+        # filter only entries that are equal to max prefix
+        filtered_list = list(filter(lambda x: x[1].netmask_length == max_prefix, filtered_list))
         print(filtered_list)
-        return sorted(filtered_list, key = lambda x: x[1], reverse=True)[0][0] if len(filtered_list) > 0 else ""
+        # reverse sort and return next hop of head
+        return sorted(filtered_list, key = lambda x: x[1], reverse=True)[0][0]
     
     def dump(self) -> List[Dict[str, Any]]:
         """
