@@ -6,325 +6,571 @@ import random
 import select
 import socket
 from datetime import datetime
-from enum import Enum, auto
+from enum import Enum
 from typing import List, Tuple
-import argparse, socket, time, json, select, struct, sys, math, os
-import math
+
+from stateMachine import StateMachine, LogEntry
 
 BROADCAST = "FFFF"
 
-class ReplicaState(Enum):
-    FOLLOWER  = auto()
-    CANDIDATE = auto()
-    LEADER    = auto()
+# send heartbeat after this many ms
+HEARTBEAT_TIMEOUT = 30
 
-class LogEntry:
-    term: int
-    key: str
-    value: str
+# restart election after this many ms
+ELECTION_TIMEOUT = random.randint(150, 300)
 
-    def __init__(self, term, value, key):
-        self.term = term
-        self.value = value
-        self.key = key
-    
-    def to_dict(self):
-        return {"term": self.term, "key": self.key, "value": self.value} 
+# append entries timeout in ms
+APPEND_ENTRIES_TIMEOUT = 20
+
+# flush put requests after this many ms
+FLUSH_PUT_REQUEST_TIMER = 10
+
+# leader should get a majority of responses within this time limit. For detecting hard partitions
+QUORUM_TIMEOUT = 300
+
+
+class ServerState(Enum):
+    LEADER = 0
+    FOLLOWER = 1
+    CANDIDATE = 2
+
+
+def hasTimedOut(time1: datetime, timeout: int) -> bool:
+    """Returns true if timeout has occurred and False if not"""
+
+    diff = datetime.now() - time1
+    elapsed_time = int((diff.seconds * 1000) + (diff.microseconds / 1000))
+    return elapsed_time > timeout
+
 
 class Replica:
-    def __init__(self, port, id, others):
-        # Variables that I do not expect to change during the execution of the algo
-        self._port = port
-        self._id = id
-        self._others = others
-        self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self._socket.bind(('localhost', 0))
-        self._majority = math.ceil((len(self._others) + 1) / 2)
-        self._electionTimeout = random.randint(200, 300)
-        self._heartBeatTimer = 30 # 30 ms
-        self._lastHeartBeatTime = datetime.now()
+    others: List[str]
+    term: int
+    id: str
+    port: int
+    voted: bool
+    stateMachine: StateMachine
 
-        # volatile variables 
-        self.currentTerm = 0
-        self.votedFor = None
-        self.votesReceived = set()
-        self.log: List[LogEntry] = []
-        self.commitIndex = 0
-        self.lastApplied = 0
-        self.nextIndex = {}
-        self.matchIndex = {}
-        self.stateMachine = {}
-        self.state = ReplicaState.FOLLOWER
-        self.bufferedMessages = []
+    def __init__(self, port: int, id: str, others: List[str]):
+        self.port = port
+        self.id = id
+        self.others = others
+        self.majority = (len(self.others) + 1) // 2 + 1  # the majority of this distributed system
+        self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.socket.bind(('localhost', 0))
+        self.stateMachine = StateMachine()
+        self.status = ServerState.FOLLOWER
+        self.term = 0
         self.leader = "FFFF"
+        self.voted = False
+        self.vote_count = 0
+        # for followers
+        self.lastHeartBeatReceived = datetime.now()
+        # for leader
+        self.lastHeartBeatSent = datetime.now()
+        # maintain buffer of messages that we cannot process yet.
+        self.buffer = []
+        # keep track of the majority committed replicas
+        self.num_of_committed_command = 1
+        # highest index matched for each server
+        self.matchIndex = {i: -1 for i in self.others}
+        # nextIndex of each follower
+        self.followerNextIndex = self.initializeFollowerNextIndex()
+        # put messages that are received during a commit process
+        self.batchedPutRequests = []
+        # last put message served
+        self.lastPutMessageServed = datetime.now()
+        # set of all followers that have responded within QUORUM_TIMEOUT
+        self.followersResponded = set()
+        # when the last quorum was started
+        self.quorumStarted = None
+        # variable to keep track if leader is in a minority partition
+        self.inMinorityPartition = False
 
-        print("Replica %s starting up with election timeout %s" % (self._id, self._electionTimeout), flush=True)
-        hello = { "src": self._id, "dst": BROADCAST, "leader": BROADCAST, "type": "hello" }
+        print("Replica %s starting up" % self.id, flush=True)
+        hello = {"src": self.id, "dst": BROADCAST, "leader": BROADCAST, "type": "hello"}
         self.send(hello)
         print("Sent hello message: %s" % hello, flush=True)
 
     def send(self, message):
-        print(f"Sending {message}")
-        self._socket.sendto(json.dumps(message).encode('utf-8'), ('localhost', self._port))
+        print(f"Sending: {message}", flush=True)
+        self.socket.sendto(json.dumps(message).encode('utf-8'), ('localhost', self.port))
 
-    def getLastLogTerm(self):
-        if len(self.log) == 0:
-            return 0
-        
-        return self.log[-1].term
-
-    def cancelElectionTimer(self):
-        self._lastHeartBeatTime = datetime.now()
-
-    def processGetMessage(self, message):
-        
-        src = message["src"]
-        dst = message["dst"]
-        mid = message["MID"]
-        key = message["key"]
-
-        if self.state == ReplicaState.FOLLOWER and self.leader != "FFFF":
-            response = {"src": self._id, "dst": src, "leader": self.leader, "type": "redirect", "MID": mid}
-        elif self.state == ReplicaState.LEADER:
-            response = {"src": self._id, "dst": src, "leader": self.leader, "type": "ok", "MID": mid, "value": self.stateMachine.get(key, "")}
-        else:
-            self.bufferedMessages.append(message)
-        self.send(response)
-
-    def processPutMessage(self, message):
-                
-        src = message["src"]
-        dst = message["dst"]
-        mid = message["MID"]
-        key = message["key"]
-        value = message["value"]
-
-        if self.state == ReplicaState.FOLLOWER and self.leader != "FFFF":
-            response = {"src": self._id, "dst": src, "leader": self.leader, "type": "redirect", "MID": mid}
-        elif self.state == ReplicaState.LEADER:
-            logEntry = LogEntry(self.currentTerm, key, value)
-            self.log.append(logEntry)
-            self.stateMachine[key] = value
-            response = {"src": self._id, "dst": src, "leader": self.leader, "type": "ok", "MID": mid}
-        else:
-            # If we don't know the leader we buffer the message so that we can handle it later on
-            self.bufferedMessages.append(message)
-            return
-        self.send(response)
-
-    def processRequestVote(self, message):
-
-        src = message["src"]
-        cTerm = message["term"]
-        cLastLogIdx = message["lastLogIdx"]
-        cLastLogTerm = message["lastLogTerm"]
-
-        if cTerm > self.currentTerm:
-            self.currentTerm = cTerm
-            self.votedFor = None
-            self.votesReceived = set()
-            self.status = ReplicaState.FOLLOWER
-        
-        lastLogTerm = self.getLastLogTerm()
-
-        cLogOk = (cLastLogTerm > lastLogTerm) or (cLastLogTerm == lastLogTerm and cLastLogIdx >= len(self.log) - 1)
-        voteResponse = {"src": self._id, "dst": src, "leader": self.leader,  "type": "RequestVoteResponse", "srcTerm": self.currentTerm}
-
-        if cLogOk and self.state == ReplicaState.FOLLOWER and cTerm == self.currentTerm and (self.votedFor is None or self.votedFor == src):
-            self.votedFor = src
-            voteResponse["granted"] = True
-            self.cancelElectionTimer()
-        else:
-            voteResponse["granted"] = False
-        
-        self.send(voteResponse)
-
-    def processRequestVoteResponse(self, message):
-
-        src = message["src"]
-        dst = message["dst"]
-        srcTerm = message["srcTerm"]
-        voteGranted = message["granted"]
-
-        if srcTerm > self.currentTerm:
-            self.status = ReplicaState.FOLLOWER
-            self.votedFor = None
-            self.votesReceived = set()
-            self.cancelElectionTimer()
-        
-        else:
-            if (srcTerm == self.currentTerm and self.state != ReplicaState.LEADER) and voteGranted and src not in self.votesReceived:
-                self.votesReceived.add(src)
-                if len(self.votesReceived) >= self._majority:
-                    self.state = ReplicaState.LEADER
-                    self.leader = self._id
-                    print("I have become the leader!")
-                    for node_id in self._others:
-                        if node_id == self._id:
-                            continue
-                        self.matchIndex[node_id] = 0
-                        self.nextIndex[node_id] = len(self.log)
-                        self.replicateLog(self._id, node_id)
-                    self._lastHeartBeatTime = datetime.now()
-                    self.flushPendingMessageBuffer()
-
-    def _log_to_json(self, log: List[LogEntry]):
-        serializedLog = []
-        for entry in log:
-            serializedLog.append(entry.to_dict())
-        return serializedLog
-    def replicateLog(self, sender_id, receiver_id):
-        prefix_len = self.nextIndex[receiver_id]
-
-        suffix = self._log_to_json(self.log[min(len(self.log) - 1, prefix_len):])
-        prefix_term = 0
-        
-        #if prefix_len > 0:
-        #    prefix_term = self.log[prefix_len - 1].term
-        
-        message = {
-            "src": sender_id,
-            "dst": receiver_id,
-            "leader": self.leader,
-            "type": "AppendEntriesRequest",
-            "currentTerm": self.currentTerm,
-            "prefixTerm": prefix_term,
-            "prefixLength": prefix_len,
-            "suffix": suffix,
-            "commitIndex": self.commitIndex
-        }
-        self.send(message)
-    
-    def flushPendingMessageBuffer(self):
-        # for now simple logic of just looping through buffered messages and sending reprocessing it
-        for message in self.bufferedMessages:
-            self.processMessage(message)
-        self.bufferedMessages = []
-
-    def appendNewLogEntries(self):
-        pass
-        #implement the append entries/commit logic here
-
-
-    def processAppendEntriesRequest(self, message):
-        
-        src = message["src"]
-        leaderId = message["leader"]
-        leaderTerm = message["currentTerm"]
-        suffix = message["suffix"]
-        prefixLength = message["prefixLength"]
-        prefixTerm = message["prefixTerm"]
-        commitIndex = message["commitIndex"]
-        
-        if leaderTerm > self.currentTerm:
-            self.currentTerm = leaderTerm
-            self.votedFor = None
-        if self.currentTerm == leaderTerm:
-            self.leader = leaderId
-            self.state = ReplicaState.FOLLOWER
-
-        #logOk = (len(self.log) >= prefixLength) and (prefixLength == 0 or self.log[prefixLength].term == prefixTerm)
-        logOk = True
-        msg = {"src": self._id, "dst": src, "term": self.currentTerm, "type": "AppendEntriesResponse"}
-        if self.currentTerm == leaderTerm and logOk:
-            self.appendNewLogEntries()
-            msg["granted"] = True
-            msg["ackLength"] = prefixLength + len(suffix)
-            self.cancelElectionTimer()
-            print(f"I now bow down to my leader {self.leader} in term {self.currentTerm}", flush=True)
-        else:
-            msg["granted"] = False
-            msg["ackLength"] = 0
-
-        # this gets set at the end as the leader may not get set in the if statement above
-        msg["leader"] = self.leader
-        self.send(msg)
-        self.flushPendingMessageBuffer()
-
-    def processAppendEntriesResponse(self, message):
-
-        src = message["src"]
-        granted = message["granted"]
-        srcTerm = message["term"]
-        ackLength = message["ackLength"]
-
-        if srcTerm == self.currentTerm and self.state == ReplicaState.LEADER:
-            if ackLength > self.matchIndex[src]:
-                self.nextIndex[src] = ackLength
-                self.matchIndex[src] = ackLength
-
-        # enchance this with failed append entries rpc        
-
-        if srcTerm > self.currentTerm:
-            self.currentTerm = srcTerm
-            self.state = ReplicaState.FOLLOWER
-            self.votedFor = None
-            self.votesReceived = set()
-        # to enhance this with the logic to handle failed AppendEntriesRPC
-
-    def processMessage(self, message):
-        type = message["type"]
-        
-        if message["src"] == self._id:
-            # message sent by us received back. Should not be possible
-            print("Received back a message sent from me. Ignoring")
-            return
-        if type == "get":
-            self.processGetMessage(message)
-        elif type == "put":
-            self.processPutMessage(message)
-        elif type == "RequestVote":
-            self.processRequestVote(message)
-        elif type == "RequestVoteResponse":
-            self.processRequestVoteResponse(message)
-        elif type == "AppendEntriesRequest":
-            self.processAppendEntriesRequest(message)
-        elif type == "AppendEntriesResponse": 
-            self.processAppendEntriesResponse(message)
-        else:
-            # TODO: Let's implemented process RequestVoteRPC then
-            raise NotImplementedError(f"Message {type} not implemented yet")
-
-    def hasElectionTimedOut(self):
-        return (datetime.now() - self._lastHeartBeatTime).microseconds / 1000 > self._electionTimeout
-
-    def hasHeartBeatTimedOut(self):
-        return (datetime.now() - self._lastHeartBeatTime).microseconds / 1000 > self._heartBeatTimer
-    
-    def startElection(self):
-        self.currentTerm += 1
-        self.state = ReplicaState.CANDIDATE
-        self.votedFor = self._id
-        self.votesReceived.add(self._id)
-
-        print(f"I {self._id} have become a candidate for term {self.currentTerm} needing {self._majority} votes to win")
-        msg = {
-            "type": "RequestVote",
-            "src": self._id,
-            "dst": "FFFF",
-            "term": self.currentTerm,
-            "leader": "FFFF",
-            "lastLogIdx": len(self.log) - 1,
-            "lastLogTerm": self.getLastLogTerm()
-        }
-        self.cancelElectionTimer()
-        self.send(msg)
-
+    def election(self):
+        """
+        votes for itself by incrementing term and transitions to Candidate state. Sends RequestVoteRPC with current term
+        :return: None
+        """
+        # begin an election:
+        self.term += 1
+        self.voted = False
+        self.vote_count = 1
+        self.status = ServerState.CANDIDATE
+        self.sendRequestVoteRPC()
+        self.lastHeartBeatReceived = datetime.now()  # resetting the election timer
+        self.leader = "FFFF"
 
     def run(self):
+        """Main loop"""
         while True:
-            if self.state == ReplicaState.LEADER and self.hasHeartBeatTimedOut():
-                for node_id in self._others:
-                    if node_id == self._id:
-                        continue
-                    self.replicateLog(self._id, node_id)
-                self._lastHeartBeatTime = datetime.now()
-            if (self.state == ReplicaState.FOLLOWER or self.state == ReplicaState.CANDIDATE) and self.hasElectionTimedOut():
-                self.startElection()
-            data, addr = self._socket.recvfrom(65535)
+            # timeout & no winner
+            # Change: check the flow chart
+            if (self.status == ServerState.FOLLOWER or self.status == ServerState.CANDIDATE) and \
+                    hasTimedOut(self.lastHeartBeatReceived, ELECTION_TIMEOUT):
+                # print(f"Starting new election term {self.term + 1}. Timeout {ELECTION_TIMEOUT}")
+                self.election()
+
+            # sending AppendEntry to maintain the authority
+            elif hasTimedOut(self.lastHeartBeatSent, HEARTBEAT_TIMEOUT) \
+                    and self.status == ServerState.LEADER:
+                self.sendAppendEntryRPC(heartbeat=True)
+
+            # if a message is already under processing, retry appendEntries that may have timed out
+            # if self.status == ServerState.LEADER and len(self.appendEntryTimer) > 0:
+            #     self.retryTimedOutAppendEntries()
+
+            if hasTimedOut(self.lastPutMessageServed, FLUSH_PUT_REQUEST_TIMER):
+                self.handlePutMessage()
+
+            # check if we are in a minority partition
+            if self.status == ServerState.LEADER and hasTimedOut(self.quorumStarted, QUORUM_TIMEOUT):
+                self.checkNetworkPartition()
+
+            # if you are a leader or if you have a new leader, you are no longer in minority partition
+            if self.status == ServerState.LEADER or self.leader != "FFFF":
+                self.inMinorityPartition = False
+
+            data, addr = self.socket.recvfrom(65535)
             msg = data.decode('utf-8')
-            print("Received message '%s'" % (msg,), flush=True)
-            self.processMessage(json.loads(msg))
+            data = json.loads(msg)
+            if data["type"] == "AppendEntry" and len(data["entries"]) > 10:
+                pass
+            else:
+                print(f"Received message {data}")
+                self.process_message(data)
+
+    def process_message(self, message) -> None:
+        """
+        - remains in follower as long as it received valid RPC from a leader or candidate
+        - Leader send periodic AppendEntries RPC to all followers to maintain authority
+        :return:
+        """
+
+        if message["type"] == "put":
+            self.handlePutMessage(message)
+
+        elif message["type"] == "get":
+            self.handleGetMessage(message)
+
+        elif message["type"] == "RequestVote":
+            # print("RequestVote MSG: %s" % message)
+            self.handleRequestVoteRPC(message)
+
+        elif message["type"] == "RequestVoteResponse":
+            # print("RequestVoteResponse MSG: %s" % message)
+            self.handleRequestVoteResponse(message)
+
+        elif message["type"] == "AppendEntry":
+            # print("AppendEntry MSG: %s" % message)
+            self.handleAppendEntryRPC(message)
+
+        elif message["type"] == "AppendEntryResponse":
+            self.handleAppendEntryResponse(message)
+
+    def sendRequestVoteRPC(self) -> None:
+        """Sends request vote RPC"""
+        for dest in self.others:
+            lastLogTerm = self.stateMachine.getTermOfLastEntry()
+            message = {"term": self.term, "candidate": self.id, "src": self.id, "dst": dest, "type": "RequestVote",
+                       "leader": "FFFF", "lastLogIndex": self.stateMachine.logLength() - 1, "lastLogTerm": lastLogTerm}
+            self.send(message)
+
+    def sendAppendEntryRPC(self, heartbeat: bool, dest: str = "", newEntry=()) -> None:
+        if heartbeat:
+            for dest in self.others:
+                message = {"src": self.id, "dst": dest, "type": "AppendEntry", "leader": self.id, "term": self.term,
+                           "prevLogIndex": self.followerNextIndex[dest] - 1,
+                           "prevLogTerm": self.stateMachine.getPreviousLogTerm(self.followerNextIndex[dest] - 1),
+                           "entries": [], "leaderCommit": self.stateMachine.lastCommitIndex}
+                self.send(message)
+
+        else:
+            # print("my log: %s at index %d" % (self.stateMachine.log, self.followerNextIndex[dest]))
+            replicationMessage = {"src": self.id, "dst": dest, "type": "AppendEntry", "leader": self.id,
+                                  "term": self.term, "entries": newEntry,
+                                  "prevLogIndex": self.followerNextIndex[dest] - 1,
+                                  "prevLogTerm": self.stateMachine.getPreviousLogTerm(self.followerNextIndex[dest] - 1),
+                                  "leaderCommit": self.stateMachine.lastCommitIndex}
+            self.send(replicationMessage)
+            print(f"Adding {dest} to timer")
+            # self.appendEntryTimer[dest] = datetime.now()
+
+        self.lastHeartBeatSent = datetime.now()
+
+    def sendFailMessage(self, msg: dict, conflictingTerm: int = -1, conflictingTermIndex: int = -1) -> None:
+        """
+        Sending the fail message according to the type
+        :param conflictingTerm: Term of conflicting entry. Only for appendEntry reject
+        :param conflictingTermIndex: First index of conflicting term. Only for appendEntry reject
+        :param msg: the received responds message
+        :return: None
+        """
+        fail_msg = ""
+        if msg["type"] == "RequestVote":
+            fail_msg = {"src": self.id, "dst": msg["src"], "leader": msg["leader"], "type": msg["type"] + "Response",
+                        "response": "reject"}
+            self.send(fail_msg)
+
+        elif msg["type"] == "get" or msg["type"] == "put":
+            fail_msg = {"src": self.id, "dst": msg["src"], "leader": msg["leader"], "type": "fail", "MID": msg["MID"]}
+
+        elif msg["type"] == "AppendEntry":
+
+            if self.status == ServerState.LEADER:
+                fail_msg = {
+                    "src": self.id,
+                    "dst": msg["src"],
+                    "leader": self.id,
+                    "type": "fail",
+                    "term": self.term
+                }
+            else:
+                fail_msg = {"src": self.id, "dst": msg["src"], "leader": self.leader, "type": "AppendEntryResponse",
+                            "response": "reject", "term": self.term, "conflictingTerm": conflictingTerm,
+                            "conflictingTermIndex": conflictingTermIndex}
+
+        self.send(fail_msg)
+
+    def sendRedirectMessage(self, msg):
+        """Redirects a message to the leader"""
+        msg["type"] = "redirect"
+        msg["dst"] = msg["src"]
+        msg["src"] = self.id
+        msg["leader"] = self.leader
+        self.send(msg)
+
+    def handlePutMessage(self, msg: dict = None) -> None:
+        """
+        Handles the given put message
+        :param msg: the message received from the cline
+        :return: None
+        """
+        if self.status == ServerState.LEADER:
+            # if timer has passed, perform below logic for all messages
+            if msg:
+                self.batchedPutRequests.append(msg)
+
+            if hasTimedOut(self.lastPutMessageServed, FLUSH_PUT_REQUEST_TIMER):
+                # append new put messages to log
+                for put_msg in self.batchedPutRequests:
+                    logEntry = LogEntry(put_msg["key"], put_msg["value"], self.term, put_msg["src"], put_msg["MID"])
+                    self.stateMachine.appendToLog(logEntry)
+                    self.batchedPutRequests = []
+                # send all new put entries to followers
+                for dest in self.others:
+                    # send appendEntry only if you are not already waiting for a response from them
+                    # if dest not in self.appendEntryTimer:
+                    # print(f"My log {self.stateMachine.log}, Follower Index: {self.followerNextIndex[dest]}")
+                    newPut = self.stateMachine.getEntriesFromIndex(self.followerNextIndex[dest])
+                    self.sendAppendEntryRPC(False, dest, newPut)
+
+                # update put message timer
+                self.lastPutMessageServed = datetime.now()
+                self.batchedPutRequests = []
+
+        else:
+            if not msg:
+                return
+            # print(f"My state {self.status}")
+            if self.leader != "FFFF":
+                # redirect to the leader
+                # print(f"Redirecting PUT to leader {self.leader}")
+                self.sendRedirectMessage(msg)
+            else:
+                self.buffer.append(msg)
+
+    def handleGetMessage(self, msg: dict) -> None:
+        """
+        Handle the get message from the clients
+        :param msg: the get commands from the clinets
+        :return: None
+        """
+
+        # if you are in a minority partition, respond with fail immediately
+        if self.inMinorityPartition:
+            response = {"src": self.id, "dst": msg["src"], "leader": "FFFF", "type": "fail", "MID": msg["MID"]}
+            self.send(response)
+            return
+
+        if self.status == ServerState.LEADER:
+            print(
+                f"Uncommitted entries on leader {self.stateMachine.getEntriesFromIndex(self.stateMachine.lastApplied + 1)}"
+                f"Last Index {self.stateMachine.lastCommitIndex}, Log length {self.stateMachine.logLength()}")
+            # if log has uncommitted entries, do not respond immediately, but after entry has been committed
+            if self.stateMachine.keyInUncommittedEntries(msg["key"]):
+                # print(f"Not responding to {msg['MID']}")
+                self.buffer.append(msg)
+                return
+            value = self.stateMachine.get(msg["key"])
+            # replicates them on other servers
+            # tells servers when it is safe to apply log entries to their state machines
+            response_msg = {"src": self.id, "dst": msg["src"], "leader": self.leader, "type": "ok", "MID": msg["MID"],
+                            "value": value}
+            self.send(response_msg)
+        else:
+            # print(f"My state {self.status}")
+            if self.leader != "FFFF":
+                # redirect to the leader
+                # print(f"Redirecting GET to leader {self.leader}")
+                self.sendRedirectMessage(msg)
+            else:
+                self.buffer.append(msg)
+
+    def handleRequestVoteRPC(self, message):
+        """Handles different response types for requestVoteRPC"""
+        # lower term means immediately respond with fail
+        if message["term"] < self.term:
+            self.sendFailMessage(message)
+            return
+
+        if message["term"] > self.term:
+            self.stepDown(message["term"])
+
+        # can only pass if this current term is same, and you have already voted in this term in which case you
+        # want to return a fail message.
+        if (message["term"] == self.term and self.voted) \
+                or self.compareLogForVote(message["lastLogTerm"], message["lastLogIndex"]):
+            self.sendFailMessage(message)
+            # if you get a higher term, step down to follower
+            return
+
+        if self.status == ServerState.FOLLOWER:
+            success_message = {"src": self.id, "dst": message["src"], "leader": message["leader"],
+                               "type": "RequestVoteResponse", "response": "approve"}
+            self.voted = True
+            self.send(success_message)
+            # reset election timer for this term when we accept a leader
+            self.lastHeartBeatReceived = datetime.now()
+
+        elif self.status == ServerState.CANDIDATE:
+            self.sendFailMessage(message)
+            # print("Bug in code, should not reach here")
+            # exit(1)
+
+        else:
+            # if you are leader and you get someone from a higher term with a log as good as yours
+            self.sendFailMessage(message)
+
+    def handleAppendEntryRPC(self, message):
+        """Method to handle appendEntries."""
+
+        # extract useful information
+        leaderTerm = message["term"]
+        prevLogIndex = message["prevLogIndex"]
+        prevLogTerm = message["prevLogTerm"]
+        message["heartBeatResponse"] = (not message["entries"])
+        # reject older term
+        if leaderTerm < self.term:
+            self.sendFailMessage(message)
+            return
+
+        if leaderTerm > self.term:
+            self.stepDown(leaderTerm)
+            self.leader = message["leader"]
+
+        # if leader term doesn't match or log doesn't match the leaders, send fail message
+        if not self.stateMachine.matchesLogAtIndex(prevLogIndex, prevLogTerm):
+            # print(f"REJECTING cause of mismatch")
+            # print(f"My actual log {self.stateMachine.log}")
+            # get conflicting term and conflicting index
+            conflictingTerm = self.stateMachine.getConflictingTerm(prevLogIndex)
+            firstIndex = self.stateMachine.getFirstIndexOfTerm(conflictingTerm)
+            self.sendFailMessage(message, conflictingTerm, firstIndex)
+            self.lastHeartBeatReceived = datetime.now()
+            return
+
+        if message["leader"] != self.leader:
+            # print(f"Received new leader!, I am {self.status}")
+            # accept new leader and flush buffer
+            self.leader = message["leader"]
+            # flush buffer when a new leader is found
+            self.flushBuffer()
+
+        isHeartBeatResponse = True
+        if message["entries"]:
+            # add new entries to log new entries
+            self.stateMachine.appendLog(prevLogIndex, message["entries"])
+            # print(f"Accepting new entries: {message['entries']}")
+            isHeartBeatResponse = False
+
+        # respond with ok to leader
+        responseMessage = {"src": self.id, "dst": self.leader, "leader": self.leader,
+                           "type": "AppendEntryResponse", "response": "ok", "heartBeatResponse": isHeartBeatResponse,
+                           "matchIndex": self.stateMachine.logLength() - 1}
+        self.send(responseMessage)
+        # reset heartbeat timer
+        self.lastHeartBeatReceived = datetime.now()
+
+        # commit new entries based on leader commit
+        if message["leaderCommit"] > self.stateMachine.lastCommitIndex:
+            self.stateMachine.lastCommitIndex = min(self.stateMachine.lastApplied + 1, message["leaderCommit"])
+            for i in range(self.stateMachine.lastApplied + 1, self.stateMachine.lastCommitIndex + 1):
+                if i < self.stateMachine.logLength():
+                    # print(f"Committing {self.stateMachine.log[i]}")
+                    self.stateMachine.commitEntry(i)
+
+    def handleRequestVoteResponse(self, message):
+        """Method to handle and respond to requestVoteRPC"""
+        if message["response"] == "approve":
+            self.vote_count += 1
+            # print("VOTES FOR %s: %d out of %d" % (self.id, self.vote_count, len(self.others) + 1))
+            if self.status != ServerState.LEADER and self.vote_count >= self.majority:
+                self.stepUp()
+
+    def handleAppendEntryResponse(self, message) -> None:
+        """Process response to append entry"""
+        # source has responded in this quorum timeslot
+        self.followersResponded.add(message["src"])
+
+        # implemented match index for non-empty appendEntry response
+        if message["response"] == "ok":
+            if not message["heartBeatResponse"]:
+                # update match index for follower if I get a successful response as their nextIndex
+                self.matchIndex[message["src"]] = message["matchIndex"]
+                self.followerNextIndex[message["src"]] = self.stateMachine.logLength()
+                # print(f"Updated match index for {message['src']} = {self.matchIndex[message['src']]}")
+                # print(f"Updated next index for {message['src']} = {self.stateMachine.logLength()}")
+                self.respondBackToClientAndCommit()
+
+        else:
+            # if leader receives a response with higher term, update its own term and reset leader
+            if message["term"] > self.term:
+                self.term = message["term"]
+                self.leader = message["leader"]
+                return
+
+            followerId = message["src"]
+            # conflicting term and index for follower
+            conflictingTerm = message["conflictingTerm"]
+            conflictingIndex = message["conflictingTermIndex"]
+
+            # -1 means receivers log is empty so send full log next time
+            if conflictingTerm == -1:
+                self.followerNextIndex[followerId] = 0
+
+            # sync next index for quicker recovery
+            elif self.stateMachine.getTermFromIndex(conflictingIndex) <= conflictingTerm:
+                self.followerNextIndex[followerId] = conflictingIndex
+
+            else:
+                # find index with conflicting term
+                newIndex = self.stateMachine.getFirstIndexOfTerm(conflictingTerm)
+                if newIndex == float('inf'):
+                    newIndex = 0
+                self.followerNextIndex[followerId] = newIndex
+
+            # reconstruct entries
+            newPut = self.stateMachine.getEntriesFromIndex(self.followerNextIndex[followerId])
+            self.sendAppendEntryRPC(False, followerId, newPut)
+
+    def majorityCommitted(self, idx: int) -> bool:
+        """Returns true if majority have matched this index"""
+        count = 1
+        for (_, maxMatch) in self.matchIndex.items():
+            if maxMatch >= idx:
+                count += 1
+
+        return count >= self.majority
+
+    def respondBackToClientAndCommit(self) -> None:
+        """Applies all outstanding entries in the log that have not been locally applied yet"""
+        # find the highest commit index
+        for n in range(self.stateMachine.lastCommitIndex + 1, self.stateMachine.logLength()):
+            if self.majorityCommitted(n) and self.stateMachine.getTermFromIndex(n) == self.term:
+                self.stateMachine.lastCommitIndex = n
+        # apply all between last applied and commit index
+        for entry in self.stateMachine.log[self.stateMachine.lastApplied + 1: self.stateMachine.lastCommitIndex + 1]:
+            # print(f"Committing Entry {entry.__dict__}")
+            # accepts log entries from clients
+            self.stateMachine.commit(entry.getKey(), entry.getValue())
+            # respond ok to client cause a quorum has agreed
+            responseMessage = {"src": self.id, "dst": entry.getSource(), "leader": self.leader, "type": "ok",
+                               "MID": entry.getMID()}
+            self.send(responseMessage)
+        # handle any buffered get requests
+        for i, message in enumerate(self.buffer):
+            if message["type"] == "get" and not self.stateMachine.keyInUncommittedEntries(message["key"]):
+                self.process_message(message)
+                self.buffer.pop(i)
+
+    def flushBuffer(self):
+        """Sends any unanswered queries to the leader that were buffered due to election. If you are the leader,
+        process the queries"""
+        for message in self.buffer:
+            if self.status == ServerState.LEADER:
+                self.process_message(message)
+            else:
+                self.sendRedirectMessage(message)
+        self.buffer = []
+
+    def initializeFollowerNextIndex(self) -> dict:
+        """Sets follower next index as last index in the log + 1"""
+        followerNextIndex = {}
+        for dest in self.others:
+            followerNextIndex[dest] = self.stateMachine.logLength()
+        return followerNextIndex
+
+    def compareLogForVote(self, lastLogTerm: int, lastLogIndex: int) -> bool:
+        """Returns True if our current log is more up-to-date than the log of the person who requested a vote"""
+
+        # if you have a higher term your log is more up-to-date
+        if self.stateMachine.getTermOfLastEntry() > lastLogTerm:
+            return True
+
+        # if you have a lower term, candidate has a better log
+        elif self.stateMachine.getTermOfLastEntry() < lastLogTerm:
+            return False
+
+        # if term are same
+        else:
+            # Deny vote if my log is longer, give vote if log is smaller or equal to length
+            return self.stateMachine.logLength() - 1 > lastLogIndex
+
+    def stepDown(self, newTerm: int) -> None:
+        """Step down to a follower"""
+        # print(f"Stepping down!")
+        self.status = ServerState.FOLLOWER
+        self.leader = "FFFF"
+        self.lastHeartBeatReceived = datetime.now()
+        self.buffer = self.batchedPutRequests[:]
+        self.batchedPutRequests = []
+        self.term = newTerm
+        self.voted = False
+
+    def stepUp(self):
+        """Become leader"""
+        print("NEW Leader: %s in TERM: %d" % (self.id, self.term))
+        self.status = ServerState.LEADER
+        self.leader = self.id
+        self.followerNextIndex = self.initializeFollowerNextIndex()
+        self.stateMachine.lastCommitIndex = self.stateMachine.logLength() - 1
+        self.matchIndex = {i: -1 for i in self.others}
+        self.sendAppendEntryRPC(heartbeat=True)
+        self.quorumStarted = datetime.now()
+        self.followersResponded = set()
+        self.flushBuffer()
+
+    def checkNetworkPartition(self):
+        """ return true when in minority, false when in majority """
+        # when in minority
+        if len(self.followersResponded) < self.majority:
+            self.followersResponded = set()
+            self.inMinorityPartition = True
+            # print(f"I am in minority partition")
+            self.election()
+        else:
+            self.followersResponded = set()
+            self.quorumStarted = datetime.now()
 
 
 if __name__ == "__main__":
