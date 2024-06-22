@@ -1,7 +1,8 @@
 from ip import tobin, get_bin_prefix_len
 
 class Network:
-    def __init__(self, network, netmask, localpref, selfOrigin, ASPath, origin):
+    def __init__(self, peer_ip, network, netmask, localpref, selfOrigin, ASPath, origin):
+        self.peer_ip = peer_ip
         self.network = network
         self.netmask = netmask
         self.netmask_length = get_bin_prefix_len(netmask)
@@ -11,8 +12,25 @@ class Network:
         self.origin = origin
         self.network_bin = tobin(network).replace(".","")
     
+    def __repr__(self):
+        return self.__str__()
     def __str__(self):
-        return f"network={self.network},netmask={self.netmask},localpref={self.localpref},selfOrigin={self.selfOrigin},ASPath={self.ASPath},origin={self.origin},networkBin={self.network_bin}"
+        return f"network=\"{self.network}\",netmask=\"{self.netmask}\",localpref={self.localpref},selfOrigin={self.selfOrigin},ASPath={self.ASPath},origin=\"{self.origin}\""
+
+    def __lt__(self, other):
+        if self.localpref < other.localpref:
+            return True
+        elif (self.localpref == other.localpref) and (not self.selfOrigin and other.selfOrigin):
+            return True
+        elif (self.localpref == other.localpref) and (self.selfOrigin == other.selfOrigin) and (len(self.ASPath) > len(other.ASPath)):
+            return True
+        elif (self.localpref == other.localpref) and (self.selfOrigin == other.selfOrigin) and (len(self.ASPath) == len(other.ASPath)) and (self.origin == "UNK" and other.origin in ("IGP", "EGP")) or (self.origin == "EGP" and other.origin == "IGP"):
+            return True
+        elif (self.localpref == other.localpref) and (self.selfOrigin == other.selfOrigin) and (len(self.ASPath) == len(other.ASPath)) and (self.origin == other.origin) and self.peer_ip > other.peer_ip:
+            return True
+        else:
+            return False
+
     def containsIP(self, ip_addr):
         """
         Check if the given ip addr is inside this network.

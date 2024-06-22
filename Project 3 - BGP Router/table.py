@@ -26,9 +26,8 @@ class Table:
             for net in networks:
                 if net.containsIP(ip_addr):
                     filtered_list.append((net_addr, net))
-
-        assert len(filtered_list) <= 1, "No support for multiple next hop routers yet"
-        return filtered_list[0][0] if len(filtered_list) == 1 else ""
+        print(filtered_list)
+        return sorted(filtered_list, key = lambda x: x[1], reverse=True)[0][0] if len(filtered_list) > 0 else ""
     
     def dump(self) -> List[Dict[str, Any]]:
         """

@@ -48,7 +48,7 @@ class Router:
                         message_source_network = network_name
                         break
                 msg = received_message.decode('utf-8')
-                self.processMessage(json.loads(msg))
+                self.processMessage(json.loads(msg), message_source_network)
 
 
                 print(f"Received message {msg} from {message_source_network} on {self.ports[message_source_network]}")
@@ -65,7 +65,7 @@ class Router:
         ASPath = network_msg['ASPath']
         origin = network_msg['origin']
         
-        network_obj: Network = Network(network, netmask, localpref, selfOrigin, ASPath, origin)
+        network_obj: Network = Network(src, network, netmask, localpref, selfOrigin, ASPath, origin)
         self.table.add_network(src, network_obj)
 
         self.forwardUpdateMessage(msg)
@@ -107,13 +107,13 @@ class Router:
     def handleWithdrawMessage(self, msg: Dict[str, Any]) -> None:
         assert False, "Not Implemented yet"
 
-    def handleDataMessage(self, msg: Dict[str, Any]) -> None:
+    def handleDataMessage(self, msg: Dict[str, Any], msg_src_net: str) -> None:
         
         src = msg['src']
         dst = msg['dst']
         next_hop = self.table.get_next_hop_router(dst)
-
         if not next_hop:
+            next_hop = msg_src_net
             # no next hop. Return back to source saying no route
             msg = {
                 "src": our_addr(dst),
@@ -125,7 +125,7 @@ class Router:
             msg['src'] = our_addr(next_hop)
             msg['dst'] = dst
         
-        print(f"Forwarding/Responding to data message with {msg}")
+        print(f"Forwarding/Responding to data message with {msg} on {next_hop}")
         self.send(next_hop, json.dumps(msg))
 
 
@@ -146,14 +146,14 @@ class Router:
 
 
 
-    def processMessage(self, msg):
+    def processMessage(self, msg, msg_source_net):
 
         if msg['type'] == "update":
             self.handleUpdateMessage(msg)
         elif msg['type'] == "withdraw":
             self.handleWithdrawMessage(msg)
         elif msg["type"] == "data":
-            self.handleDataMessage(msg)
+            self.handleDataMessage(msg, msg_source_net)
         elif msg['type'] == "dump":
             self.handleDumpMessage(msg)
         else:
