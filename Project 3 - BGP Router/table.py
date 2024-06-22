@@ -1,15 +1,15 @@
 
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from network import Network
 
 
 
 class Table:
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.networkMap : Dict[str , List[Network]] = {}
     
-    def add_network(self, network_addr: str, network: Network):
+    def add_network(self, network_addr: str, network: Network) -> None:
         if network_addr in self.networkMap:
             self.networkMap[network_addr].append(network)
         else:
@@ -17,7 +17,7 @@ class Table:
         print(f"Added new network: {network}")
 
     
-    def get_next_hop_router(self, ip_addr) -> Optional[str]:
+    def get_next_hop_router(self, ip_addr: str) -> str:
         """
         Filter all next hop routers in this table that ip_addr belongs to
         """
@@ -30,7 +30,7 @@ class Table:
         assert len(filtered_list) <= 1, "No support for multiple next hop routers yet"
         return filtered_list[0][0] if len(filtered_list) == 1 else ""
     
-    def dump(self):
+    def dump(self) -> List[Dict[str, Any]]:
         """
             Returns table dump
         """

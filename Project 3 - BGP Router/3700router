@@ -3,7 +3,7 @@
 import argparse, socket, time, json, select, struct, sys, math
 from dataclasses import dataclass
 from enum import Enum, auto
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from network import Network
 from table import Table
 
@@ -14,16 +14,16 @@ def our_addr(dst):
     return "%d.%d.%d.%d" % (quads[0], quads[1], quads[2], quads[3])
 
 class Router:
-    relations = {}
-    sockets = {}
-    ports = {}
+    relations: dict[str, str] = {}
+    sockets: dict[str, socket.socket] = {}
+    ports: dict[str, int] = {}
 
-    def __init__(self, asn, connections):
+    def __init__(self, asn: int, connections: List[str]) -> None:
         print("Router at AS %s starting up" % asn)
         print(connections) 
         self.asn = asn
-        self.update_messages = []
-        self.withdraw_messages = []
+        self.update_messages: List[Dict[str, Any]] = []
+        self.withdraw_messages: List[Dict[str, Any]] = []
         self.table: Table = Table()
         for relationship in connections:
             port, neighbor, relation = relationship.split("-")
@@ -34,7 +34,7 @@ class Router:
             self.send(neighbor,
                       json.dumps({"type": "handshake", "src": our_addr(neighbor), "dst": neighbor, "msg": {}}))
 
-    def send(self, network, message):
+    def send(self, network: str, message: str):
         self.sockets[network].sendto(message.encode('utf-8'), ('localhost', self.ports[network]))
 
     def run(self):
@@ -54,7 +54,7 @@ class Router:
                 print(f"Received message {msg} from {message_source_network} on {self.ports[message_source_network]}")
         return
 
-    def handleUpdateMessage(self, msg):
+    def handleUpdateMessage(self, msg: Dict[str, Any]) -> None:
         network_msg = msg['msg']
 
         src = msg['src']
@@ -65,8 +65,8 @@ class Router:
         ASPath = network_msg['ASPath']
         origin = network_msg['origin']
         
-        network: Network = Network(network, netmask, localpref, selfOrigin, ASPath, origin)
-        self.table.add_network(src, network)
+        network_obj: Network = Network(network, netmask, localpref, selfOrigin, ASPath, origin)
+        self.table.add_network(src, network_obj)
 
         self.forwardUpdateMessage(msg)
 
@@ -104,10 +104,10 @@ class Router:
         else:
             print("WARNING: Unknow relationship with src: {src}. This should never happen")
 
-    def handleWithdrawMessage(self, msg):
+    def handleWithdrawMessage(self, msg: Dict[str, Any]) -> None:
         assert False, "Not Implemented yet"
 
-    def handleDataMessage(self, msg):
+    def handleDataMessage(self, msg: Dict[str, Any]) -> None:
         
         src = msg['src']
         dst = msg['dst']
@@ -130,7 +130,7 @@ class Router:
 
 
 
-    def handleDumpMessage(self, msg):
+    def handleDumpMessage(self, msg: Dict[str, Any]) -> None:
         
         src = msg['src']
         
