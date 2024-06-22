@@ -73,7 +73,7 @@ class Router:
     def _sendMessageToNeighboursWithPredictate(self, msg, predicate):
 
         for neighbour, relation in self.relations.items():
-            if predicate(neighbour, relation):
+            if predicate(neighbour):
                 continue
             msg['src'] = our_addr(neighbour)
             msg['dst'] = neighbour
@@ -98,9 +98,9 @@ class Router:
         }
         relation = self.relations[src]
         if relation == "cust":
-           self._sendMessageToNeighboursWithPredictate(msg, lambda x, y: x == src)
+           self._sendMessageToNeighboursWithPredictate(msg, lambda x: x == src)
         elif relation == "peer" or relation == "prov":
-            self._sendMessageToNeighboursWithPredictate(msg, lambda x, y: src == x or self.relations[y] != "cust")    
+            self._sendMessageToNeighboursWithPredictate(msg, lambda x: src == x or self.relations[x] != "cust")    
         else:
             print("WARNING: Unknow relationship with src: {src}. This should never happen")
 
@@ -136,6 +136,12 @@ class Router:
             msg['src'] = our_addr(next_hop)
             msg['dst'] = dst
         
+        src_relation = self.relations[msg_src_net]
+        dst_relation = self.relations[next_hop]
+        if next_hop != msg_src_net and (src_relation != "cust" and dst_relation != "cust"):
+            print(f"Dropping data message since next hop: {next_hop} is not a valid relationship {dst_relation}")
+            return
+
         print(f"Forwarding/Responding to data message with {msg} on {next_hop}")
         self.send(next_hop, json.dumps(msg))
 
