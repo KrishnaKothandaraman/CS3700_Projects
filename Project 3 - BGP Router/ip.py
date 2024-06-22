@@ -1,149 +1,46 @@
-# Custom exception classes for clean error handling.
-class InvalidIPException(Exception):
-    def __init__(self, ip: str, message: str) -> None:
-        self.ip = ip
-        self.message = message
-        super().__init__(self.message)
 
-    def __str__(self):
-        print(f"{self.ip}: {self.message}")
+from typing import List, Tuple
 
 
-class InvalidCIDRException(Exception):
-    def __init__(self, netmask: str, message: str) -> None:
-        self.ip = netmask
-        self.message = message
-        super().__init__(self.message)
+def tobin(ip_addr: str) -> str:
+    quads = ip_addr.split(".")
+    if len(quads) != 4:
+        print(f"ERROR: Invalid ip addr provided to tobin {ip_addr}")
+        return ""
 
-    def __str__(self):
-        print(f"{self.ip}: {self.message}")
+    binary = '.'.join([str(bin(int(quad)))[2:].zfill(8) for quad in quads])
+    return binary
 
+def get_bin_prefix_len(ip_addr: str) -> int:
+    bin_ip = tobin(ip_addr)
 
-def validIP(ip: str) -> bool:
-    """
-    Returns True if IP is valid and False otherwise
-    :param ip: IPv4 address as string
-    :return: bool
-    """
-    ip_split = ip.split(".")
+    bin_ip = bin_ip.replace(".", "")
+    
+    return len(bin_ip.split('0')[0])
 
-    return len(ip_split) == 4 and all(map(lambda x: x.isdecimal() and 0 <= int(x) <= 255, ip_split))
+def toip(bin_ip: str) -> str:
+    quads = bin_ip.split(".")
+    if len(quads) != 4:
+        print(f"ERROR: Invalid bin addr provided to tobin {bin_ip}")
+        return ""
+    # I am so proud of this
+    return ".".join([str(sum(map(lambda x: 2**(7-x[0])*int(x[1]), list(enumerate(quad))))) for quad in quads])
 
+def summarize_ip(ip, netmask) -> Tuple[str, int]:
+    netmask_length = get_bin_prefix_len(netmask)
+    # Ugly function. Fix this crap
+    ip_list = list(tobin(ip).replace(".",""))
+    ip_list[netmask_length - 1] = '0'
+    netmask_list = list(tobin(netmask).replace(".", ""))
+    netmask_list[netmask_length - 1] = "0"
 
-def tobin(ip: str) -> str:
-    """
-    Returns the string representation of the IP address in binary
-
-    :return: continuous string representation of 32 bit ipv4 address
-    """
-
-    if not validIP(ip):
-        raise InvalidIPException(ip, "Invalid ipv4 address")
-
-    return "".join(map(str, ["{0:08b}".format(int(ip)) for ip in ip.split(".")]))
-
-
-def validNetmask(netmask: str) -> bool:
-    """
-    Returns bool representing validity of this netmask
-    :param netmask: netmask as an ipv4 address
-    :return: bool
-    """
-    netmask_bin_split = tobin(netmask).split('0')
-
-    return all(map(lambda x: len(x) == 0, netmask_bin_split[1:]))
-
-
-def cidr_length(netmask: str) -> int:
-    """
-    returns CIDR length
-    :return: integer
-    """
-
-    if not validIP(netmask) or not validNetmask(netmask):
-        raise InvalidCIDRException(netmask, "Invalid CIDR mask")
-
-    return max(map(len, tobin(netmask).split('0')))
-
-
-def compareIP(ip1: str, ip2: str) -> bool:
-    """
-    True if ip1 < ip2
-    :param ip1: ipv4 address in dotted notation
-    :param ip2: ipv4 address in dotted notation
-    :return: boolean
-    """
-
-    if not validIP(ip1):
-        raise InvalidIPException(ip1, "Not a valid IP")
-    if not validIP(ip2):
-        raise InvalidIPException(ip2, "Not a valid IP")
-
-    return ip1.split(".") < ip2.split(".")
-
-
-def are_adjacent(ip1: str, netmask1: str, ip2: str, netmask2: str) -> bool:
-    """
-    Returns a boolean True if ip1, netmask1 and ip2, netmask2 are adjacent
-    :param ip1: ipv4 as string
-    :param netmask1: netmask as string
-    :param ip2: ipv4 as string
-    :param netmask2: netmask as string
-    :return: bool
-    """
-
-    if not validIP(ip1) or not validIP(ip2):
-        raise InvalidIPException(ip1, "Not valid IP")
-    if not validNetmask(netmask2) or not validNetmask(netmask1):
-        raise InvalidCIDRException(netmask1, "Not valid netmask")
-
-    cidr1 = cidr_length(netmask1)
-    cidr2 = cidr_length(netmask2)
-
-    if cidr1 != cidr2:
-        return False
-    if tobin(ip1)[:cidr1 - 1] != tobin(ip2)[:cidr2 - 1]:
-        return False
-    return True
-
-
-def aggregate_network(ip: str, netmask: str) -> str:
-    """
-    generates the aggregated network with given ip and netmask
-    :param ip: the ip needed to me aggregated
-    :param netmask: the ip's netmask
-    :return: a tuple of aggregated network ip and netmask
-    """
-    CIDR = cidr_length(netmask) - 1
-    binary_ip = tobin(ip)[:CIDR]
-    num_of_zero_to_bind = 32 - len(binary_ip)
-    binary_ip += "0" * num_of_zero_to_bind
-    return binary_to_dot_ip(binary_ip)
-
-
-def aggregate_netmask(netmask: str):
-    """
-    generating the netmask of aggregation
-    :param netmask: the current netmask
-    :return: the netmask for aggregated networks
-    """
-    new_netmask = ""
-    CIDR = cidr_length(netmask) - 1
-    num_of_zero_to_bind = 32 - CIDR
-    new_netmask += "1" * CIDR
-    new_netmask += "0" * num_of_zero_to_bind
-    return binary_to_dot_ip(new_netmask)
-
-
-def binary_to_dot_ip(binary_ip: str):
-    """
-    convert the given binary_ip to a doted ip:
-    "11111111000000001111111100000000"  ->  "255.0.255.0"
-    :param binary_ip:
-    :return:
-    """
-    result = []
+    ip_new = ""
+    netmask_new = ""
     for i in range(4):
-        octet = binary_ip[i * 8: (i + 1) * 8]
-        result.append(str(int(octet, 2)))
-    return ".".join(result)
+        ip_new += "".join(ip_list[(8*i):8*(i+1)]) + "."
+        netmask_new += "".join(netmask_list[(8*i):8*(i+1)]) + "." 
+    
+
+    return (toip(ip_new[:-1]), toip(netmask_new[:-1]))
+
+    

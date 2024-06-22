@@ -3,8 +3,7 @@
 import argparse, socket, time, json, select, struct, sys, math
 from dataclasses import dataclass
 from enum import Enum, auto
-from typing import List, Optional
-
+from typing import Any, Dict, List, Optional
 from network import Network
 from table import Table
 
@@ -15,17 +14,17 @@ def our_addr(dst):
     return "%d.%d.%d.%d" % (quads[0], quads[1], quads[2], quads[3])
 
 class Router:
-    relations = {}
-    sockets = {}
-    ports = {}
-    table: Table
+    relations: dict[str, str] = {}
+    sockets: dict[str, socket.socket] = {}
+    ports: dict[str, int] = {}
 
-    def __init__(self, asn, connections):
+    def __init__(self, asn: int, connections: List[str]) -> None:
         print("Router at AS %s starting up" % asn)
+        print(connections) 
         self.asn = asn
-        self.update_messages = []
-        self.withdraw_messages = []
-        self.table = Table()
+        self.update_messages: List[Dict[str, Any]] = []
+        self.withdraw_messages: List[Dict[str, Any]] = []
+        self.table: Table = Table()
         for relationship in connections:
             port, neighbor, relation = relationship.split("-")
             self.sockets[neighbor] = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -35,7 +34,7 @@ class Router:
             self.send(neighbor,
                       json.dumps({"type": "handshake", "src": our_addr(neighbor), "dst": neighbor, "msg": {}}))
 
-    def send(self, network, message):
+    def send(self, network: str, message: str):
         self.sockets[network].sendto(message.encode('utf-8'), ('localhost', self.ports[network]))
 
     def run(self):
@@ -49,165 +48,136 @@ class Router:
                         message_source_network = network_name
                         break
                 msg = received_message.decode('utf-8')
+                self.processMessage(json.loads(msg), message_source_network)
 
-                self.process_message(msg, message_source_network)
 
                 print(f"Received message {msg} from {message_source_network} on {self.ports[message_source_network]}")
         return
 
-    def process_message(self, msg, message_source_network) -> None:
-        """
-        This method accepts a message and executes the method corresponding to the message type
-        :param msg: Message received
-        :param message_source_network: Peer IP this message was received from
-        """
-        message = json.loads(msg)
+    def handleUpdateMessage(self, msg: Dict[str, Any]) -> None:
+        network_msg = msg['msg']
 
-        # update the table with the given update-message
-        if message["type"] == "update":
-            self.handle_update_message(message)
+        src = msg['src']
+        network = network_msg['network']
+        netmask = network_msg['netmask']
+        localpref = network_msg['localpref']
+        selfOrigin = network_msg['selfOrigin']
+        ASPath = network_msg['ASPath']
+        origin = network_msg['origin']
+        
+        network_obj: Network = Network(src, network, netmask, localpref, selfOrigin, ASPath, origin)
+        self.table.add_network(src, network_obj)
 
-        # update the table with the given withdraw-message
-        elif message["type"] == "withdraw":
-            self.handle_withdraw_message(message, message_source_network)
+        self.forwardUpdateMessage(msg)
 
-        # TODO: CARE ABOUT RELATION WITH PEER
-        elif message["type"] == "data":
-            self.handle_data_message(message, message_source_network)
+    def _sendMessageToNeighboursWithPredictate(self, msg, predicate):
 
-        elif message["type"] == "dump":
-            self.handle_dump_message(message)
+        for neighbour, relation in self.relations.items():
+            if predicate(neighbour):
+                continue
+            msg['src'] = our_addr(neighbour)
+            msg['dst'] = neighbour
+            self.send(neighbour, json.dumps(msg))
 
-    def handle_update_message(self, message: dict) -> None:
-        """
-        Performs logic to update forwarding table and forward messages to peers.
-        :param message: Message as decoded JSON
-        :return:
-        """
-        update_network_object = Network(message)
-        self.update_messages.append(message)
-        self.table.add_entry(message)
+    def forwardUpdateMessage(self, msg):
+        src = msg['src']
 
-        relation = self.relations[message["src"]]
+        if src not in self.relations:
+            print("WARNING: src not in relations: {src}")
+            return
 
-        # message from a customer: send updates to all other neighbors
-        # should only include the network, netmask, and ASPath.
-        if relation == "cust":
-            self.forward_update_message(update_network_object, False)
-        # message from a peer or a provider: only send updates to your customers
-        elif relation == "prov" or relation == "peer":
-            self.forward_update_message(update_network_object, True)
-
-    def handle_withdraw_message(self, message: dict, message_source_network: str) -> None:
-        """
-        Performs logic to delete entry from table and forward to peers
-        :param message: Decoded JSON message
-        :param message_source_network: Network that we receieved the message from
-        """
-        # 1: save a copy of the revocation
-        messages_to_pop = []
-        for withdrawal in message["msg"]:
-            for i, update_message in enumerate(self.update_messages):
-                if update_message["src"] == message["src"] and update_message["msg"]["network"] == withdrawal["network"] and update_message["msg"]["netmask"] == withdrawal["netmask"]:
-                    messages_to_pop.append(update_message)
-
-        for update_message in messages_to_pop:
-            print(f"Removing {update_message}")
-            self.update_messages.remove(update_message)
-
-        self.table.rebuild_table(self.update_messages)
-        relation = self.relations[message["src"]]
-
-        # 3: possibly send copies of the revocation to other neighboring routers
-
-        # message from a customer: send updates to all other neighbors
-        # should only include the network, netmask, and ASPath.
-
-        if relation == "cust":
-            self.forward_withdraw_message(message, message_source_network, False)
-        # message from a peer or a provider: only send updates to your customers
-        elif relation == "prov" or relation == "peer":
-            self.forward_withdraw_message(message, message_source_network, True)
-
-    def handle_dump_message(self, message: dict) -> None:
-        """
-        Helper function to handle dump message. Sends serialized forwarding table back to source
-        :param message: Message received as decoded JSON
-        :return: None
-        """
-        serialized_table = self.table.get_serialized_table()
-        dump_table_msg = {
-            "src": our_addr(message["src"]),
-            "dst": message["src"],
-            "type": "table",
-            "msg": serialized_table
+        msg = {
+            "type": "update",
+            "src": "", #tbd
+            "dst": "", #tbd,
+            "msg" : {
+                "network": msg['msg']["network"],
+                "netmask": msg['msg']['netmask'],
+                'ASPath': [self.asn] + msg['msg']['ASPath']
+            }
         }
-        self.send(message["src"], json.dumps(dump_table_msg))
-
-    def handle_data_message(self, message: dict, network_received_from: str) -> None:
-        """
-        Logic to handle data message
-        :param message: Message received as decoded JSON
-        :param network_received_from: the network that we receive the message from
-        """
-        neighbour_networks = self.table.find_route(message["dst"])
-        no_route_message = json.dumps({
-            "src": our_addr(message["src"]),
-            "dst": message["src"],
-            "type": "no route",
-            "msg": {}
-        })
-        incoming_relation = self.relations[network_received_from]
-        if neighbour_networks:
-            message_to_send = json.dumps(message)
-            send_message_to = sorted(neighbour_networks)[0].peer
-            outgoing_relation = self.relations[send_message_to]
+        relation = self.relations[src]
+        if relation == "cust":
+           self._sendMessageToNeighboursWithPredictate(msg, lambda x: x == src)
+        elif relation == "peer" or relation == "prov":
+            self._sendMessageToNeighboursWithPredictate(msg, lambda x: src == x or self.relations[x] != "cust")    
         else:
-            message_to_send = no_route_message
-            send_message_to = network_received_from
-            outgoing_relation = self.relations[network_received_from]
+            print("WARNING: Unknow relationship with src: {src}. This should never happen")
 
-        if incoming_relation == "cust":
-            self.send(send_message_to, message_to_send)
-        elif incoming_relation != "cust" and outgoing_relation == "cust":
-            self.send(send_message_to, message_to_send)
-        elif (incoming_relation != "cust") and (outgoing_relation != "cust"):
-            # Drop the message: router does not forward data for free
-            # send no route back to the src
-            self.send(network_received_from, no_route_message)
+    def handleWithdrawMessage(self, msg: Dict[str, Any]) -> None:
+        
+        src = msg['src']
 
-    def forward_update_message(self, network_obj: Network, send_only_to_customers: bool) -> None:
-        """
-        Forwards update messages
-        :param network_obj: Network object representing update message
-        :param send_only_to_customers: Boolean flag representing whether this message has to only be sent to customers
-        """
-        for neighbour in self.sockets:
-            json_message = json.dumps({"type": "update", "src": our_addr(neighbour), "dst": neighbour,
-                                       "msg": network_obj.serialize_for_forwarding(self.asn)})
-            if neighbour != network_obj.peer:
-                if send_only_to_customers:
-                    if self.relations[neighbour] == "cust":
-                        self.send(neighbour, json_message)
-                else:
-                    self.send(neighbour, json_message)
+        self.table.remove_networks_from_peer(src, msg['msg'])
 
-    def forward_withdraw_message(self, message: dict, message_source_network, send_only_to_customers: bool) -> None:
-        """
-        Forwards withdraw messages
-        :param message: Withdraw message
-        :param message_source_network: Source IP of peer
-        :param send_only_to_customers: Boolean flag representing whether this message has to only be sent to customers
-        """
-        for neighbour in self.sockets:
-            message["src"] = our_addr(neighbour)
-            message["dst"] = neighbour
-            if neighbour != message_source_network:
-                if send_only_to_customers:
-                    if self.relations[neighbour] == "cust":
-                        self.send(neighbour, json.dumps(message))
-                else:
-                    self.send(neighbour, json.dumps(message))
+        relation = self.relations[src]
+        if relation == "cust":
+           self._sendMessageToNeighboursWithPredictate(msg, lambda x: x == src)
+        elif relation == "peer" or relation == "prov":
+            self._sendMessageToNeighboursWithPredictate(msg, lambda x: src == x or self.relations[x] != "cust")    
+        else:
+            print("WARNING: Unknow relationship with src: {src}. This should never happen")
+
+    def handleDataMessage(self, msg: Dict[str, Any], msg_src_net: str) -> None:
+        
+        src = msg['src']
+        dst = msg['dst']
+        next_hop = self.table.get_next_hop_router(dst)
+        if not next_hop:
+            next_hop = msg_src_net
+            # no next hop. Return back to source saying no route
+            msg = {
+                "src": our_addr(dst),
+                "dst": dst,
+                "msg": {},
+                "type": "no route"
+            }
+        else:
+            msg['src'] = our_addr(next_hop)
+            msg['dst'] = dst
+        
+        src_relation = self.relations[msg_src_net]
+        dst_relation = self.relations[next_hop]
+        if next_hop != msg_src_net and (src_relation != "cust" and dst_relation != "cust"):
+            print(f"Dropping data message since next hop: {next_hop} is not a valid relationship {dst_relation}")
+            msg['type'] = "no route"
+            msg['msg'] = {}
+            msg['dst'] = msg_src_net
+            msg['src'] = our_addr(msg_src_net)
+
+        print(f"Forwarding/Responding to data message with {msg} on {next_hop}")
+        self.send(next_hop, json.dumps(msg))
+
+
+
+    def handleDumpMessage(self, msg: Dict[str, Any]) -> None:
+        
+        src = msg['src']
+        
+        table_contents = self.table.dump()
+        msg = {
+            'src': our_addr(src),
+            'dst': src,
+            "type": "table",
+            "msg": table_contents
+        }
+
+        self.send(msg['dst'], json.dumps(msg))
+
+
+
+    def processMessage(self, msg, msg_source_net):
+
+        if msg['type'] == "update":
+            self.handleUpdateMessage(msg)
+        elif msg['type'] == "withdraw":
+            self.handleWithdrawMessage(msg)
+        elif msg["type"] == "data":
+            self.handleDataMessage(msg, msg_source_net)
+        elif msg['type'] == "dump":
+            self.handleDumpMessage(msg)
+        else:
+            assert False, f"Message {msg['type']} not implemented yet"
 
 
 if __name__ == "__main__":

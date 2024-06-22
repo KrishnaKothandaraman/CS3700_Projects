@@ -1,119 +1,118 @@
-import copy
 
+from typing import Any, Dict, List, Optional, Tuple
+from typing_extensions import TypeAlias
 from network import Network
-from typing import Dict, List, Tuple, Optional, Set
-import ip
 
-
-# represents the routing table
 class Table:
-    routing_table: List[Tuple[Network, str]]
-    aggregate_result: List[Tuple[Network, Tuple[Network, Network]]]
-    aggregated_networks: Set[Network]
 
-    def __init__(self):
-        self.routing_table = []
-        self.aggregate_result = []
-        self.aggregated_networks = set()
+    def __init__(self) -> None:
+        self.networkMap : Dict[str , List[Network]] = {}
+        self.updateMessageMap: Dict[str, List[Network]] = {}
 
-    # add an entry to the table with given message
-    def add_entry(self, message):
-        neighbor_ip = message["src"]
-        network = Network(message)
+    def add_network(self, network_addr: str, network: Network) -> None:
+        if network_addr in self.networkMap:
+            self.networkMap[network_addr].append(network)
+            self.updateMessageMap[network_addr].append(network)
+        else:
+            self.networkMap[network_addr] = [network]
+            self.updateMessageMap[network_addr] = [network]
 
-        # just in case the neighbor changes its "network-netmask" fields in msg
-        self.routing_table.append((network, neighbor_ip))
-        self.aggregate()
+        self.aggregateNetworks(network_addr)
+        print(f"Added new network: {network}")
 
-    def get_adjacent_networks(self, other: Network, aggregation_map: Dict[int, int]) -> Optional[int]:
+    def aggregateNetworks(self, ip):
         """
-        Return list of indices of networks from routing table that are adjacent to a given network
-        :param aggregation_map: Dictionary of already processed networks
-        :param other: Network instance
-        :return: List[int]
+        1. Group them by localpref, selfOrigin, aspath, origin
+        2. Perform route aggregation on the groups
         """
-        for i, (network, neighbour) in enumerate(self.routing_table):
-            if i in aggregation_map or network == other:
-                continue
-            if ip.are_adjacent(other.network, other.netmask, network.network, network.netmask):
-                return i
+        hasSummarized = True
+        # keep looping while there are more to summarize
+        while hasSummarized:
+            hasSummarized = False
+            networks = self.networkMap[ip]
+            isSummarized = set()
+            aggregated_networks = []
+            for i in range(len(networks)):
+                if i in isSummarized:
+                    continue
+                for j in range(i + 1, len(networks)):
+                    if networks[i].is_summarizable(networks[j]) and networks[i].are_adjacent(networks[j]):
+                        print('Summarizing!')
+                        new_network = Network(ip, networks[i].network, networks[i].netmask, networks[i].localpref, networks[i].selfOrigin, networks[i].ASPath, networks[i].origin)
+                        new_network.summarize_self()
+                        aggregated_networks.append(new_network)
+                        isSummarized.add(j)
+                        hasSummarized = True
+                        break
+                else:
+                    aggregated_networks.append(networks[i])
+            self.networkMap[ip] = aggregated_networks
 
-    def aggregate(self) -> None:
+    def rebuildNetworkMap(self, ip: str):
+
+        self.networkMap[ip] = []
+        for net in self.updateMessageMap[ip]:
+            self.networkMap[ip].append(net)
+        
+        self.aggregateNetworks(ip)
+
+    def remove_networks_from_peer(self, peer_ip: str, network_list : List[Dict[str, str]]):
         """
-        aggregate the routing_table if possible
-        :return: None
+            Loops through all peers and when it finds peer that equals the src, it remove all networks from that peer that are advertised in the withdraw
+            message
         """
-        aggregation_map: Dict[int, int] = {}
-        for i, (network, neighbour) in enumerate(self.routing_table):
-            adjacent_network = self.get_adjacent_networks(network, aggregation_map)
-            if not adjacent_network:
-                continue
-            aggregate_network = self.get_aggregate_networks(network, adjacent_network)
-            if not aggregate_network:
-                continue
-            aggregation_map[i] = aggregate_network
+        new_updates = []
+        for network_to_remove in network_list:
+            for network in self.updateMessageMap[peer_ip]:
+                if network_to_remove['network'] == network.network and network_to_remove['netmask'] == network.netmask:
+                    continue
+                new_updates.append(network)
+        
+        self.updateMessageMap[peer_ip] = new_updates
+        self.rebuildNetworkMap(peer_ip)
 
-        for network, adjacent_network_index in aggregation_map.items():
-            if not adjacent_network_index:
-                continue
-            original_network = copy.deepcopy(self.routing_table[network][0])
-            adjacent_network = self.routing_table[adjacent_network_index][0]
-
-            self.routing_table.pop(adjacent_network_index)
-
-            self.routing_table[network][0].network = ip.aggregate_network(self.routing_table[network][0].network,
-                                                                          self.routing_table[network][0].netmask)
-            self.routing_table[network][0].netmask = ip.aggregate_netmask(self.routing_table[network][0].netmask)
-
-            self.aggregate_result.append((self.routing_table[network][0], (original_network, adjacent_network)))
-
-        if len(aggregation_map) > 0:
-            self.aggregate()
-
-    def get_aggregate_networks(self, network, adjacent_network) -> Optional[int]:
+    
+    def get_next_hop_router(self, ip_addr: str) -> str:
         """
-        Removes adjacent networks that cannot be aggregated with network
-        :param network: Base network
-        :param adjacent_network: index of adjacent network from routing table
-        :return: List[int]
-        """
-        for i, (peer_network, neighbour) in enumerate(self.routing_table):
-            if i != adjacent_network:
-                continue
-            if not network.have_same_attributes(peer_network):
-                return None
-        return adjacent_network
+        Filter all next hop routers in this table that ip_addr belongs to.
 
-    def rebuild_table(self, update_messages) -> None:
+        1. Check for longest prefix match
+        2. If multiple longest prefixes exist, sort and return head
         """
-        Resets routing table and rebuilds it with the list of update messages provided
-        :param update_messages: List of update messages
-        :return: None
+        filtered_list: List[Tuple[str, Network]] = []
+        for net_addr, networks in self.networkMap.items():
+            for net in networks:
+                if net.containsIP(ip_addr):
+                    filtered_list.append((net_addr, net))
+        # no route
+        if len(filtered_list) == 0:
+            return ""
+        
+        # find longest prefix match in filtered_list
+        max_prefix = max(list(map(lambda x: x[1].netmask_length, filtered_list)))
+        print(max_prefix)
+        # filter only entries that are equal to max prefix
+        filtered_list = list(filter(lambda x: x[1].netmask_length == max_prefix, filtered_list))
+        print(filtered_list)
+        # reverse sort and return next hop of head
+        return sorted(filtered_list, key = lambda x: x[1], reverse=True)[0][0]
+    
+    def dump(self) -> List[Dict[str, Any]]:
         """
-        self.routing_table = []
+            Returns table dump
+        """
+        network_list = []
+        for peer_addr, networks in self.networkMap.items():
+            for network in networks:
+                network_entry = {
+                    'peer': peer_addr,
+                    "network": network.network,
+                    "netmask": network.netmask,
+                    "localpref": network.localpref,
+                    "ASPath": network.ASPath,
+                    "selfOrigin": network.selfOrigin,
+                    "origin": network.origin
+                }
+                network_list.append(network_entry)
+        return network_list
 
-        for message in update_messages:
-            self.add_entry(message)
-
-        self.aggregate()
-
-    def find_route(self, destination: str) -> List[Network]:
-        """
-        checking if the given destination is in the table or not;
-        if it is returns the corresponding neighbor's IP.
-        :param destination: IP
-        :return: neighbor's IP
-        """
-        valid_networks = []
-        for network, neighbour in self.routing_table:
-            can_route = network.prefix_match(destination)
-            if can_route:
-                valid_networks.append(network)
-        return valid_networks
-
-    def get_serialized_table(self) -> List:
-        """
-        Returns serialized representation of forwarding table
-        :return: List of dictionaries of the forwarding table
-        """
-        return list(map(lambda x: x[0].serialize(), self.routing_table))
